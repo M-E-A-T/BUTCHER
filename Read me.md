@@ -1,7 +1,6 @@
 # Update:
-- Added Live inputt\
-- Added summing to mono \
- \
+- Added Live inputt
+- Added summing to mono 
 
 \
 # Notes:
