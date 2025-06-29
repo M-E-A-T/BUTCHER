@@ -1,5 +1,5 @@
 # Update:
-- Added Live inputt
+- Added Live input
 - Added summing to mono 
 
 
