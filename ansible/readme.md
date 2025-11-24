@@ -1,0 +1,1 @@
+This is a short guide on how to use ansible 
