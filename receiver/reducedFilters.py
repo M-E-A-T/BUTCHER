@@ -15,7 +15,7 @@ current_speed = 1.0
 current_flux = 0        # store last flux value
 
 # Active filter stack (in order applied)
-active_filters = []  # e.g. ["gaussian", "sobel", "colormap"]
+active_filters = []  # e.g. ["gaussian", "sobel", "sharpen"]
 
 # -----------------------------
 # OSC CALLBACK FOR BPM
@@ -127,10 +127,30 @@ def apply_morph_gradient(frame):
 
 def apply_colormap(frame):
     COLORMAPS = [
-        cv2.COLORMAP_TWILIGHT,
-        cv2.COLORMAP_PARULA,
-    ]
-    
+    cv2.COLORMAP_AUTUMN,
+    cv2.COLORMAP_BONE,
+    cv2.COLORMAP_JET,
+    cv2.COLORMAP_WINTER,
+    cv2.COLORMAP_RAINBOW,
+    cv2.COLORMAP_OCEAN,
+    cv2.COLORMAP_SUMMER,
+    cv2.COLORMAP_SPRING,
+    cv2.COLORMAP_COOL,
+    cv2.COLORMAP_HSV,
+    cv2.COLORMAP_PINK,
+    cv2.COLORMAP_HOT,
+    cv2.COLORMAP_PARULA,
+    cv2.COLORMAP_MAGMA,
+    cv2.COLORMAP_INFERNO,
+    cv2.COLORMAP_PLASMA,
+    cv2.COLORMAP_VIRIDIS,
+    cv2.COLORMAP_CIVIDIS,
+    cv2.COLORMAP_TWILIGHT,
+    cv2.COLORMAP_TWILIGHT_SHIFTED,
+    cv2.COLORMAP_TURBO,
+    cv2.COLORMAP_DEEPGREEN,
+]
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     return cv2.applyColorMap(gray, COLORMAPS[random.randint(0, len(COLORMAPS) - 1)])
 
@@ -149,7 +169,7 @@ def laplacian_count_from_flux(flux_int: int) -> int:
     elif flux_int < 20:
         return 3
     else:
-        return 5   # high flux still 3
+        return 5   # high flux = 5 passes
 
 # -----------------------------
 # APPLY SINGLE FILTER BY NAME
@@ -192,23 +212,26 @@ def apply_filter_by_name(frame, name):
 def apply_filter_stack(frame, filters):
     out = frame
 
-    # 1) Apply only non-laplacian filters from the manual stack
-    base_filters = [f for f in filters if f != "laplacian"]
+    # 1) Apply all filters except 'laplacian' and 'colormap'
+    base_filters = [f for f in filters if f not in ("laplacian", "colormap")]
     for f_name in base_filters:
         out = apply_filter_by_name(out, f_name)
 
-    # 2) Then apply Laplacian N times based on *current* flux
+    # 2) Apply Laplacian N times based on current flux
     lap_count = laplacian_count_from_flux(current_flux)
     for _ in range(lap_count):
         out = apply_laplacian(out)
 
-    # 3) Label: show base stack + flux + lap count
+    # 3) ALWAYS apply colormap last
+    out = apply_colormap(out)
+
+    # 4) Label: show base stack + flux + lap count + note colormap
     if base_filters:
         stack_str = " -> ".join(base_filters)
     else:
         stack_str = "none"
 
-    label = f"Stack: {stack_str} | flux={current_flux} | laps={lap_count}"
+    label = f"Stack: {stack_str} + colormap | flux={current_flux} | laps={lap_count}"
 
     cv2.putText(out, label, (20, 40),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7,
@@ -224,7 +247,7 @@ def print_stack():
 # -----------------------------
 # VIDEO LOOP
 # -----------------------------
-cap = cv2.VideoCapture("media/test.mp4")
+cap = cv2.VideoCapture("../media/test.mp4")
 
 if not cap.isOpened():
     print("ERROR: Could not open test.mp4")
@@ -250,7 +273,7 @@ print("  9: add Pencil sketch")
 print("  d: add Detail enhance")
 print("  e: add Edge-preserving")
 print("  g: add Morph gradient")
-print("  c: add Color map")
+print("  c: (colormap is always ON, last)")
 print("  h: add Sharpen")
 
 last_time = time.time()
@@ -293,7 +316,7 @@ while True:
     elif key == ord('2'):
         active_filters.append("scharr")
         print_stack()
-    # NOTE: '3' no longer appends "laplacian" manually – flux controls it
+    # '3' no longer manually adds laplacian – it's flux-driven
     elif key == ord('4'):
         active_filters.append("canny")
         print_stack()
@@ -322,8 +345,8 @@ while True:
         active_filters.append("morph_gradient")
         print_stack()
     elif key == ord('c'):
-        active_filters.append("colormap")
-        print_stack()
+        # colormap is always on, so just log it
+        print("Colormap is always ON and applied last.")
     elif key == ord('h'):
         active_filters.append("sharpen")
         print_stack()

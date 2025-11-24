@@ -2,6 +2,7 @@
 import sounddevice as sd
 import numpy as np
 import sys
+from pythonosc.udp_client import SimpleUDPClient  # <<< NEW
 
 # --------------------------
 # CONFIG
@@ -10,7 +11,7 @@ import sys
 HOP_S = 1024              # block size / FFT size (power of 2 is nice)
 
 # Make silence gate VERY forgiving so we don't kill real signals
-SILENCE_RMS = 1e-4       # was 1e-4
+SILENCE_RMS = 1e-4        # was 1e-4
 
 F_MIN = 20.0              # ignore DC / subsonic
 F_MAX = 20000.0           # upper limit for search
@@ -25,6 +26,17 @@ SAMPLE_RATE = None        # will be set from chosen device
 
 # Toggle this to see levels
 DEBUG_LEVEL = True
+
+# --------------------------
+# OSC CONFIG (like your flux sender)
+# --------------------------
+OSC_PORT      = 9000
+OSC_ADDR_F0   = "/f0"             # OSC address for f0
+OSC_LOCAL_IP  = "127.0.0.1"       # same machine
+OSC_BCAST_IP  = "192.168.8.255"   # LAN broadcast
+
+osc_local = SimpleUDPClient(OSC_LOCAL_IP, OSC_PORT)
+osc_bcast = SimpleUDPClient(OSC_BCAST_IP, OSC_PORT, allow_broadcast=True)
 
 
 # --------------------------
@@ -167,15 +179,21 @@ def audio_callback(indata, frames, time_info, status):
         print(f"RMS: {rms:.8f}", file=sys.stderr)
 
     if rms < SILENCE_RMS:
-        print("0.0", flush=True)
+        f0_int = 0
+        print(f"{f0_int}", flush=True)
+        osc_local.send_message(OSC_ADDR_F0, f0_int)
+        osc_bcast.send_message(OSC_ADDR_F0, f0_int)
         return
 
     # compute dominant frequency for this block
     freq_block = dominant_frequency(mono, SAMPLE_RATE)
 
-    # if something went wrong, just print 0
+    # if something went wrong, just send 0
     if freq_block <= 0.0:
-        print("0.0", flush=True)
+        f0_int = 0
+        print(f"{f0_int}", flush=True)
+        osc_local.send_message(OSC_ADDR_F0, f0_int)
+        osc_bcast.send_message(OSC_ADDR_F0, f0_int)
         return
 
     # smoothing
@@ -185,7 +203,12 @@ def audio_callback(indata, frames, time_info, status):
         a = FREQ_SMOOTH_ALPHA
         smoothed_freq = (1.0 - a) * smoothed_freq + a * freq_block
 
-    print(f"{smoothed_freq:.2f}", flush=True)
+    f0_int = int(smoothed_freq)
+
+    # print + OSC send (whole int)
+    print(f"{f0_int}", flush=True)
+    osc_local.send_message(OSC_ADDR_F0, f0_int)
+    osc_bcast.send_message(OSC_ADDR_F0, f0_int)
 
 
 # --------------------------
@@ -196,15 +219,18 @@ def main():
     global selected_device, selected_channel, num_channels
 
     print("\n" + "="*60)
-    print("Real-time Dominant Frequency Detector")
+    print("Real-time Dominant Frequency Detector → OSC (/f0)")
     print("="*60)
-    print("Prints dominant frequency in Hz (0 when silent).")
+    print("Sends dominant frequency as int Hz (0 when silent).")
     print("Press Ctrl+C to stop.\n")
 
     selected_device, selected_channel = select_device()
 
     print("Starting audio stream...")
     print(f"Device index: {selected_device}, Channel: {selected_channel+1}, SR: {SAMPLE_RATE}\n")
+    print(f"OSC:")
+    print(f"  local:     {OSC_LOCAL_IP}:{OSC_PORT}  ({OSC_ADDR_F0})")
+    print(f"  broadcast: {OSC_BCAST_IP}:{OSC_PORT}  ({OSC_ADDR_F0})\n")
 
     try:
         with sd.InputStream(
