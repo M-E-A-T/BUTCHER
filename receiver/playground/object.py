@@ -1,29 +1,50 @@
+import random
 import cv2
 import numpy as np
 import threading
 import time
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import BlockingOSCUDPServer
-import random
 import os
 
 # -----------------------------
-# GLOBAL BPM + SPEED + FLUX
+# GLOBAL BPM + SPEED
 # -----------------------------
 current_bpm = 100.0
 current_speed = 1.0
 
-current_flux = 0        # store last flux value
+# Active filter stack (in order applied)
+active_filters = []  # e.g. ["gaussian", "sobel", "colormap"]
+
+# Object detection toggle
+object_detection_enabled = False
 
 # Folder where *this script* lives
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Build the path relative to the script location
-video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
+video_path = os.path.join(BASE_DIR, "..", "..", "media", "test.mp4")
 
-# Active filter stack (in order applied)
-active_filters = []  # e.g. ["gaussian", "sobel", "sharpen"]
+# -----------------------------
+# YOLO (GENERAL OBJECT DETECTION)
+# -----------------------------
+YOLO_DIR = os.path.join(BASE_DIR, "yolo")
+YOLO_CONFIG = os.path.join(YOLO_DIR, "yolov3.cfg")
+YOLO_WEIGHTS = os.path.join(YOLO_DIR, "yolov3.weights")
+YOLO_NAMES = os.path.join(YOLO_DIR, "coco.names")
 
+# Load class names
+with open(YOLO_NAMES, "r") as f:
+    classes = [line.strip() for line in f.readlines()]
+
+# Load network
+net = cv2.dnn.readNetFromDarknet(YOLO_CONFIG, YOLO_WEIGHTS)
+# (Optional: use CPU explicitly; comment these if you have CUDA and want to use it)
+net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+
+layer_names = net.getLayerNames()
+output_layers = [layer_names[i - 1] for i in net.getUnconnectedOutLayers().flatten()]
 
 # -----------------------------
 # OSC CALLBACK FOR BPM
@@ -46,32 +67,18 @@ def got_bpm(addr, bpm_value):
     print(f"BPM RECEIVED: {bpm_value:.2f}   --> Speed = {current_speed:.3f}x")
 
 # -----------------------------
-# OSC CALLBACK FOR FLUX
-# -----------------------------
-def got_flux(addr, flux_value):
-    global current_flux
-    try:
-        flux_value = int(flux_value)
-    except:
-        return
-
-    current_flux = flux_value
-    print(f"FLUX RECEIVED: {current_flux}")
-
-# -----------------------------
 # START OSC RECEIVER THREAD
 # -----------------------------
 def start_osc():
     dispatcher = Dispatcher()
     dispatcher.map("/bpm", got_bpm)
-    dispatcher.map("/flux", got_flux)
 
     server = BlockingOSCUDPServer(("0.0.0.0", 9000), dispatcher)
-    print("OSC Receiver running on port 9000... (listening for /bpm and /flux)")
+    print("OSC Receiver running on port 9000... (listening for /bpm)")
     server.serve_forever()
 
-osc_thread = threading.Thread(target=start_osc, daemon=True)
-osc_thread.start()
+# osc_thread = threading.Thread(target=start_osc, daemon=True)
+# osc_thread.start()
 
 # -----------------------------
 # FILTER FUNCTIONS
@@ -100,7 +107,8 @@ def apply_laplacian(frame):
 
 def apply_canny(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
+    ran = (random.randrange(1, 10)) * 10
+    edges = cv2.Canny(gray, ran, ran)
     return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
 def apply_gaussian(frame):
@@ -134,50 +142,14 @@ def apply_morph_gradient(frame):
     return cv2.cvtColor(grad, cv2.COLOR_GRAY2BGR)
 
 def apply_colormap(frame):
-    COLORMAPS = [
-    cv2.COLORMAP_AUTUMN,
-    cv2.COLORMAP_BONE,
-    cv2.COLORMAP_JET,
-    cv2.COLORMAP_WINTER,
-    cv2.COLORMAP_RAINBOW,
-    cv2.COLORMAP_OCEAN,
-    cv2.COLORMAP_SUMMER,
-    cv2.COLORMAP_SPRING,
-    cv2.COLORMAP_COOL,
-    cv2.COLORMAP_HSV,
-    cv2.COLORMAP_PINK,
-    cv2.COLORMAP_HOT,
-    cv2.COLORMAP_PARULA,
-    cv2.COLORMAP_MAGMA,
-    cv2.COLORMAP_INFERNO,
-    cv2.COLORMAP_PLASMA,
-    cv2.COLORMAP_VIRIDIS,
-    cv2.COLORMAP_CIVIDIS,
-    cv2.COLORMAP_TWILIGHT,
-    cv2.COLORMAP_TWILIGHT_SHIFTED,
-    cv2.COLORMAP_TURBO,
-    cv2.COLORMAP_DEEPGREEN,
-]
-
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return cv2.applyColorMap(gray, COLORMAPS[random.randint(0, len(COLORMAPS) - 1)])
+    return cv2.applyColorMap(gray, cv2.COLORMAP_JET)
 
 def apply_sharpen(frame):
     kernel = np.array([[0, -1, 0],
                        [-1, 5,-1],
                        [0, -1, 0]])
     return cv2.filter2D(frame, -1, kernel)
-
-# -----------------------------
-# MAP FLUX → LAPLACIAN STACK COUNT
-# -----------------------------
-def laplacian_count_from_flux(flux_int: int) -> int:
-    if flux_int < 10:
-        return 1
-    elif flux_int < 20:
-        return 3
-    else:
-        return 5   # high flux = 5 passes
 
 # -----------------------------
 # APPLY SINGLE FILTER BY NAME
@@ -215,31 +187,94 @@ def apply_filter_by_name(frame, name):
         return frame
 
 # -----------------------------
+# GENERAL OBJECT DETECTION (YOLO)
+# -----------------------------
+def apply_object_detection(frame_display, frame_for_detection):
+    """
+    Run YOLO on frame_for_detection, draw boxes on frame_display.
+    This lets you detect on 'clean' frames but draw over filtered ones.
+    """
+    h, w = frame_for_detection.shape[:2]
+
+    # Create input blob
+    blob = cv2.dnn.blobFromImage(
+        frame_for_detection, 1/255.0, (416, 416),
+        swapRB=True, crop=False
+    )
+    net.setInput(blob)
+    outs = net.forward(output_layers)
+
+    class_ids = []
+    confidences = []
+    boxes = []
+
+    conf_threshold = 0.5
+    nms_threshold = 0.4
+
+    # Parse YOLO outputs
+    for out in outs:
+        for detection in out:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > conf_threshold:
+                center_x = int(detection[0] * w)
+                center_y = int(detection[1] * h)
+                bw = int(detection[2] * w)
+                bh = int(detection[3] * h)
+                x = int(center_x - bw / 2)
+                y = int(center_y - bh / 2)
+
+                boxes.append([x, y, bw, bh])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
+
+    detected_count = 0
+    if len(indices) > 0:
+        for i in indices.flatten():
+            x, y, bw, bh = boxes[i]
+            label = classes[class_ids[i]] if class_ids[i] < len(classes) else str(class_ids[i])
+            conf = confidences[i]
+
+            # Draw box + label on the display frame
+            cv2.rectangle(frame_display, (x, y), (x + bw, y + bh), (0, 255, 0), 2)
+            text = f"{label} {conf:.2f}"
+            cv2.putText(frame_display, text, (x, max(0, y - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            detected_count += 1
+
+    cv2.putText(
+        frame_display,
+        f"Detections: {detected_count}",
+        (20, 70),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+    return frame_display
+
+# -----------------------------
 # APPLY FULL STACK
 # -----------------------------
 def apply_filter_stack(frame, filters):
     out = frame
-
-    # 1) Apply all filters except 'laplacian' and 'colormap'
-    base_filters = [f for f in filters if f not in ("laplacian", "colormap")]
-    for f_name in base_filters:
+    for f_name in filters:
         out = apply_filter_by_name(out, f_name)
 
-    # 2) Apply Laplacian N times based on current flux
-    lap_count = laplacian_count_from_flux(current_flux)
-    for _ in range(lap_count):
-        out = apply_laplacian(out)
-
-    # 3) ALWAYS apply colormap last
-    
-
-    # 4) Label: show base stack + flux + lap count + note colormap
-    if base_filters:
-        stack_str = " -> ".join(base_filters)
+    # Label: show stack
+    if filters:
+        label = "Stack: " + " -> ".join(filters)
     else:
-        stack_str = "none"
+        label = "Stack: none"
 
-    
+    cv2.putText(out, label, (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                (255, 255, 255), 2, cv2.LINE_AA)
     return out
 
 def print_stack():
@@ -262,23 +297,17 @@ if fps <= 0:
     fps = 30.0
 frame_time = 1.0 / fps
 
-print("Playing video... Press Q to quit.")
+print("Playing video... Press P to quit.")
 print("Filter keys (stacks in order of presses):")
 print("  0: clear stack (no filters)")
 print("  1: add Sobel")
-print("  2: add Scharr")
-print("  3: (Laplacian is flux-controlled now)")
-print("  4: add Canny")
-print("  5: add Gaussian blur")
-print("  6: add Median blur")
-print("  7: add Bilateral filter")
-print("  8: add Stylization")
-print("  9: add Pencil sketch")
-print("  d: add Detail enhance")
-print("  e: add Edge-preserving")
-print("  g: add Morph gradient")
-print("  c: (colormap is always ON, last)")
-print("  h: add Sharpen")
+print("  2: add Laplacian")
+print("  3: add Canny")
+print("  4: add Morph gradient")
+print("  q: add Color map (JET)")
+print("  e: add Detail enhance")
+print("  r: add Gaussian blur")
+print("  o: toggle YOLO object detection (general objects)")
 
 last_time = time.time()
 frozen_frame = None
@@ -297,63 +326,55 @@ while True:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
+            # Keep a clean copy for detection
+            frame_clean = frame.copy()
+
+            # Apply filter stack
             frame_filtered = apply_filter_stack(frame, active_filters)
 
+            # Apply object detection overlay if enabled
+            if object_detection_enabled:
+                frame_filtered = apply_object_detection(frame_filtered, frame_clean)
+
             frozen_frame = frame_filtered
-            cv2.imshow("Video Filters (Stacking)", frame_filtered)
+            cv2.imshow("Video Filters (Stacking + YOLO Detection)", frame_filtered)
 
     else:
         if frozen_frame is not None:
-            cv2.imshow("Video Filters (Stacking)", frozen_frame)
+            cv2.imshow("Video Filters (Stacking + YOLO Detection)", frozen_frame)
 
     # KEY CONTROLS
     key = cv2.waitKey(1) & 0xFF
 
-    if key == ord('q'):
+    if key == ord('p'):          # quit with 'p'
         break
-    elif key == ord('0'):
+    elif key == ord('0'):        # clear stack
         active_filters.clear()
         print_stack()
-    elif key == ord('1'):
+    elif key == ord('1'):        # Sobel
         active_filters.append("sobel")
         print_stack()
-    elif key == ord('2'):
-        active_filters.append("scharr")
+    elif key == ord('2'):        # Laplacian
+        active_filters.append("laplacian")
         print_stack()
-    # '3' no longer manually adds laplacian – it's flux-driven
-    elif key == ord('4'):
+    elif key == ord('3'):        # Canny
         active_filters.append("canny")
         print_stack()
-    elif key == ord('5'):
-        active_filters.append("gaussian")
-        print_stack()
-    elif key == ord('6'):
-        active_filters.append("median")
-        print_stack()
-    elif key == ord('7'):
-        active_filters.append("bilateral")
-        print_stack()
-    elif key == ord('8'):
-        active_filters.append("stylization")
-        print_stack()
-    elif key == ord('9'):
-        active_filters.append("pencil")
-        print_stack()
-    elif key == ord('d'):
-        active_filters.append("detail")
-        print_stack()
-    elif key == ord('e'):
-        active_filters.append("edge_preserve")
-        print_stack()
-    elif key == ord('g'):
+    elif key == ord('4'):        # Morph gradient
         active_filters.append("morph_gradient")
         print_stack()
-    elif key == ord('c'):
-        # colormap is always on, so just log it
-        print("Colormap is always ON and applied last.")
-    elif key == ord('h'):
-        active_filters.append("sharpen")
+    elif key == ord('q'):        # Color map
+        active_filters.append("colormap")
         print_stack()
-    
+    elif key == ord('e'):        # Detail enhance
+        active_filters.append("detail")
+        print_stack()
+    elif key == ord('r'):        # Gaussian blur
+        active_filters.append("gaussian")
+        print_stack()
+    elif key == ord('o'):        # Toggle object detection
+        object_detection_enabled = not object_detection_enabled
+        print(f"YOLO object detection: {'ON' if object_detection_enabled else 'OFF'}")
+
 cap.release()
 cv2.destroyAllWindows()
