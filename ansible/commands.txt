@@ -1,0 +1,10 @@
+RUN FORM THE ROOT FOLDER 
+
+
+FIRST FROM THE ROOT, RUN THE BUTCHER SCRIPT 
+
+python3 detection/flux.py
+
+THEN, FROM THE 
+
+ansible-playbook -i ansible/config/hosts.ini ansible/ping.yml

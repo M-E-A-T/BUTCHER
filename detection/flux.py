@@ -6,6 +6,7 @@ import sys
 from collections import deque
 from time import sleep
 from pythonosc.udp_client import SimpleUDPClient
+import threading
 
 # ==============================
 # CONFIG
@@ -33,9 +34,11 @@ prev_spectrum  = None
 smoothed_flux  = None
 FLUX_SMOOTH    = 0.2
 
+stop_flag = False   # <-- press q to set this and stop
+
 
 # ==============================
-# DEVICE SELECTION (IDENTICAL TO YOUR BPM SCRIPT)
+# DEVICE SELECTION
 # ==============================
 
 def list_audio_devices(pa):
@@ -147,11 +150,15 @@ def compute_spectral_flux(signal):
 
 
 # ==============================
-# AUDIO CALLBACK  (IDENTICAL STRUCTURE to BPM SCRIPT)
+# AUDIO CALLBACK
 # ==============================
 
 def readAudioFrames(in_data, frame_count, time_info, status):
-    global smoothed_flux, selected_channel, num_channels
+    global smoothed_flux, selected_channel, num_channels, stop_flag
+
+    if stop_flag:
+        # Tell PyAudio to stop the stream
+        return (in_data, pyaudio.paComplete)
 
     # Convert bytes -> float32 array
     signal = np.frombuffer(in_data, dtype=np.float32)
@@ -177,7 +184,7 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     # Print
     print(f"{flux_int}", flush=True)
 
-    # OSC send
+    # OSC send (note: these are UDP clients; no port binding to release)
     osc_local.send_message(OSC_ADDR, flux_int)
     osc_bcast.send_message(OSC_ADDR, flux_int)
 
@@ -185,20 +192,49 @@ def readAudioFrames(in_data, frame_count, time_info, status):
 
 
 # ==============================
+# KEYBOARD LISTENER (q to quit)
+# ==============================
+
+def keyboard_listener():
+    """
+    Waits for 'q' + Enter on stdin and sets stop_flag.
+    This lets you quit cleanly without Ctrl+C.
+    """
+    global stop_flag
+    try:
+        while not stop_flag:
+            line = sys.stdin.readline()
+            if not line:
+                # EOF (e.g. non-interactive env) -> just exit listener
+                break
+            if line.strip().lower() == 'q':
+                print("\n[q] Quit requested.")
+                stop_flag = True
+                break
+    except Exception:
+        # Don't kill the main program if stdin is weird
+        pass
+
+
+# ==============================
 # MAIN
 # ==============================
 
 def main():
-    global selected_device_index
+    global selected_device_index, stop_flag
 
     print("\nReal-time Spectral Flux → OSC (/flux)")
     print("Prints Flux every block")
     print(f"Sending OSC on {OSC_ADDR}")
     print(f"  → local:     {OSC_LOCAL_IP}:{OSC_PORT}")
     print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}")
-    print("Press Ctrl+C to stop.\n")
+    print("Press 'q' then Enter to stop.\n")
 
     pa = pyaudio.PyAudio()
+
+    # start keyboard listener thread
+    kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
+    kb_thread.start()
 
     try:
         selected_device_index = select_device(pa)
@@ -216,22 +252,27 @@ def main():
 
         inputStream.start_stream()
 
-        while inputStream.is_active():
+        # Main loop: run until stream stops or stop_flag is set
+        while inputStream.is_active() and not stop_flag:
             sleep(0.1)
 
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n[Ctrl+C] Stopping...")
     except Exception as e:
         print(f"\nError: {e}")
     finally:
+        stop_flag = True
         try:
             if 'inputStream' in locals():
                 inputStream.stop_stream()
                 inputStream.close()
-        except:
+        except Exception:
             pass
+
         pa.terminate()
         print("Audio stream closed.")
+        # SimpleUDPClient doesn't hold a bound port; sockets are cleaned up on exit.
+        print("OSC clients cleaned up (no server port was bound).")
 
 
 if __name__ == "__main__":
