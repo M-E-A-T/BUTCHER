@@ -1,0 +1,25 @@
+---
+- name: Ensure Python 3 and pip are installed on remote hosts
+  hosts: meatops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Install Python 3 and pip on Debian/Ubuntu
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Install Python 3 and pip on RedHat/CentOS
+      ansible.builtin.yum:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+        state: present
+      when: ansible_os_family == "RedHat"

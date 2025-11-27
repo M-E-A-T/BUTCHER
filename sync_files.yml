@@ -1,0 +1,26 @@
+---
+- name: Synchronize a local folder to remote hosts using synchronize module
+  hosts: all
+  
+  
+  tasks:
+    - name: Use rsync to synchronize the folder
+      ansible.posix.synchronize:
+        # The path on the control machine (Ansible host)
+        src: "../"
+        # The path on the remote managed node
+        dest: "{{ ansible_env.HOME }}/Desktop/BUTCHER/"
+        # Optional parameters for rsync behavior:
+        # archive mode (recursive, preserves permissions, ownership, timestamps, etc.)
+        archive: true 
+        # compresses file data during the transfer
+        compress: true 
+        # makes rsync delete files in the dest that are not in the src
+        delete: true 
+        # specifies the transfer direction: 'push' from control to remote (default)
+        mode: push 
+        rsync_opts:
+          - "--exclude=ansible/logs/"
+          - "--exclude=.venv/"
+          - "--exclude=__pycache__/"
+          - "--exclude=.git/"

@@ -1,35 +1,107 @@
 ---
-- name: Run flux.py locally (debug)
+# ============================================================
+# PLAY 0 — RUN flux.py ON LOCALHOST ONLY
+# ============================================================
+- name: Run flux on localhost
   hosts: localhost
+  gather_facts: no
   connection: local
+
+  tasks:
+    - name: Open Terminal and run flux.py interactively
+      ansible.builtin.shell: |
+        osascript <<EOF
+        tell application "Terminal"
+            do script "cd '{{ playbook_dir }}/..'; python3 detection/flux.py"
+            activate
+        end tell
+        EOF
+      args:
+        executable: /bin/bash
+      async: 10
+      poll: 0
+    
+    - name: Open Terminal and run flux.py interactively
+      ansible.builtin.shell: |
+        osascript <<EOF
+        tell application "Terminal"
+            do script "cd '{{ playbook_dir }}/..'; python3 receiver/visualReceiver.py"
+            activate
+        end tell
+        EOF
+      args:
+        executable: /bin/bash
+      async: 10
+      poll: 0
+
+# ============================================================
+# PLAY 1 — RUN visualReceiver.py ON REMOTE HOSTS (ASYNC) USING VENV
+# ============================================================
+- name: Start visualReceiver on remote hosts
+  hosts: meatops
+  gather_facts: no
+
+  vars:
+    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+
+
+    - name: Kill spython
+      ansible.builtin.command: killall python
+      ignore_errors: yes
+
+
+    - name: Ensure logs directory exists on remote host
+      ansible.builtin.file:
+        path: "{{ project_root }}/logs"
+        state: directory
+        mode: "0755"
+
+    - name: Start visualReceiver asynchronously (logging to remote .txt, using venv)
+      ansible.builtin.shell: |
+        "{{ venv_dir }}/bin/python" receiver/visualReceiver.py \
+          > logs/visualReceiver_{{ inventory_hostname }}.txt 2>&1
+      args:
+        chdir: "{{ project_root }}"
+        executable: /bin/bash
+      environment:
+        DISPLAY: ":0"
+      async: 86400
+      poll: 0
+
+    # - name: Run OpenCV motion script on Pi display
+    #   become: true
+    #   become_user: student
+      
+    #   ansible.builtin.command: python3 {{ python_path }} 
+    #   async: 3600
+    #   poll: 0
+
+
+# ============================================================
+# PLAY 2 — FETCH .TXT LOGS TO YOUR ANSIBLE MACHINE
+# ============================================================
+- name: Fetch logs back to the Ansible controller
+  hosts: meatops
   gather_facts: no
 
   tasks:
-    - name: Run flux.py from BUTCHER directory
-      ansible.builtin.shell: |
-        echo "PLAYBOOK_DIR = {{ playbook_dir }}"
-        cd "{{ playbook_dir }}/.."
-        echo "PWD after cd:"
-        pwd
 
-        echo "Listing detection/:"
-        ls detection || echo "detection/ NOT FOUND"
+    - name: Ensure local ansible/logs folder exists
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/logs"
+        state: directory
+        mode: "0755"
 
-        echo "Running: python3 detection/flux.py"
-        python3 detection/flux.py
-      args:
-        executable: /bin/bash
-      register: flux_result
-      ignore_errors: true
+    - name: Fetch remote .txt logs to controller (into ansible/logs)
+      ansible.builtin.fetch:
+        src: "/home/{{ ansible_user }}/Desktop/BUTCHER/logs/visualReceiver_{{ inventory_hostname }}.txt"
+        dest: "{{ playbook_dir }}/logs/"
+        flat: yes
 
-    - name: Show stdout
-      ansible.builtin.debug:
-        var: flux_result.stdout
 
-    - name: Show stderr
-      ansible.builtin.debug:
-        var: flux_result.stderr
-
-    - name: Show return code
-      ansible.builtin.debug:
-        var: flux_result.rc
+    

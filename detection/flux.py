@@ -19,7 +19,7 @@ WINDOW_SIZE_MULTIPLE = 1   # not used for flux, but left for consistency
 OSC_PORT      = 9000
 OSC_ADDR      = "/flux"          # OSC address for FLUX
 OSC_LOCAL_IP  = "127.0.0.1"      # same machine
-OSC_BCAST_IP  = "192.168.8.255"  # LAN broadcast
+OSC_BCAST_IP  = "7.7.7.255"  # LAN broadcast
 
 osc_local = SimpleUDPClient(OSC_LOCAL_IP, OSC_PORT)
 osc_bcast = SimpleUDPClient(OSC_BCAST_IP, OSC_PORT, allow_broadcast=True)
@@ -71,9 +71,14 @@ def select_device(pa):
         print("ERROR: No input devices found!")
         sys.exit(1)
 
+    # --------- SELECT DEVICE INDEX ----------
     while True:
         try:
-            choice = input("Select device index: ")
+            choice = input("Select device index (or 'q' to quit): ").strip()
+            if choice.lower() == 'q':
+                print("Exiting by user request.")
+                sys.exit(0)
+
             device_idx = int(choice)
 
             if device_idx in input_devices:
@@ -90,6 +95,9 @@ def select_device(pa):
                 print(f"Invalid device index. Choose from: {input_devices}")
         except ValueError:
             print("Enter a valid number.")
+        except EOFError:
+            print("\nEOF on stdin, exiting.")
+            sys.exit(1)
         except KeyboardInterrupt:
             print("\nExiting...")
             sys.exit(0)
@@ -99,6 +107,7 @@ def select_device(pa):
     audioInputSampleRate = sr
     selected_channel = None
 
+    # --------- SELECT CHANNEL ----------
     if max_channels > 1:
         print(f"\nDevice has {max_channels} input channels\n")
 
@@ -107,7 +116,11 @@ def select_device(pa):
 
         while True:
             try:
-                channel_choice = input(f"\nSelect input (1-{max_channels}): ")
+                channel_choice = input(f"\nSelect input (1-{max_channels}) or 'q' to quit: ").strip()
+                if channel_choice.lower() == 'q':
+                    print("Exiting by user request.")
+                    sys.exit(0)
+
                 channel_num = int(channel_choice)
 
                 if 1 <= channel_num <= max_channels:
@@ -118,6 +131,12 @@ def select_device(pa):
                     print(f"Enter a number between 1 and {max_channels}")
             except ValueError:
                 print("Enter a valid number.")
+            except EOFError:
+                print("\nEOF on stdin, exiting.")
+                sys.exit(1)
+            except KeyboardInterrupt:
+                print("\nExiting...")
+                sys.exit(0)
     else:
         selected_channel = 0
         print("Using single input channel\n")
@@ -168,6 +187,7 @@ def readAudioFrames(in_data, frame_count, time_info, status):
         try:
             signal = signal.reshape(-1, num_channels)[:, selected_channel]
         except ValueError:
+            # fallback if reshape fails
             signal = signal[::num_channels]
 
     # Compute spectral flux
@@ -184,7 +204,7 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     # Print
     print(f"{flux_int}", flush=True)
 
-    # OSC send (note: these are UDP clients; no port binding to release)
+    # OSC send
     osc_local.send_message(OSC_ADDR, flux_int)
     osc_bcast.send_message(OSC_ADDR, flux_int)
 
@@ -228,18 +248,19 @@ def main():
     print(f"Sending OSC on {OSC_ADDR}")
     print(f"  → local:     {OSC_LOCAL_IP}:{OSC_PORT}")
     print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}")
-    print("Press 'q' then Enter to stop.\n")
+    print("Press 'q' then Enter to stop (after the stream starts), or Ctrl+C anytime.\n")
 
     pa = pyaudio.PyAudio()
 
-    # start keyboard listener thread
-    kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
-    kb_thread.start()
-
     try:
+        # 1) First, interactively choose device & channel
         selected_device_index = select_device(pa)
 
-        # Create and start the input stream
+        # 2) AFTER THAT, start the keyboard listener
+        kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
+        kb_thread.start()
+
+        # 3) Create and start the input stream
         inputStream = pa.open(
             format=pyaudio.paFloat32,
             input=True,
@@ -271,7 +292,6 @@ def main():
 
         pa.terminate()
         print("Audio stream closed.")
-        # SimpleUDPClient doesn't hold a bound port; sockets are cleaned up on exit.
         print("OSC clients cleaned up (no server port was bound).")
 
 

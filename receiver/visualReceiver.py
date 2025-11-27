@@ -220,6 +220,10 @@ if not cap.isOpened():
     stop_osc()
     exit()
 
+cv2.namedWindow("Video Filters", cv2.WINDOW_NORMAL)
+cv2.setWindowProperty("Video Filters", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 frame_time = 1.0 / fps
 last_time = time.time()

@@ -1,0 +1,61 @@
+
+    # Add a RedHat block here if you ever need it
+    # - name: Install Python bits on RedHat
+    #   ansible.builtin.yum:
+    #     name:
+    #       - python3
+    #       - python3-pip
+    #     state: present
+    #   when: ansible_os_family == "RedHat"
+
+
+# ============================================================
+# PLAY 2 — CREATE VENV AND INSTALL REQUIREMENTS INTO IT
+# ============================================================
+- name: Create venv and install requirements into it
+  hosts: meatops
+  gather_facts: no
+
+  vars:
+    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+    project_ansible_dir: "{{ project_root }}/ansible"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+
+    - name: Create virtual environment if it does not exist
+      ansible.builtin.shell: |
+        python3 -m venv "{{ venv_dir }}"
+      args:
+        executable: /bin/bash
+        creates: "{{ venv_dir }}/bin/activate"
+
+    - name: Install requirements into venv
+      ansible.builtin.shell: |
+        cd "{{ project_ansible_dir }}"
+        "{{ venv_dir }}/bin/pip" install --upgrade pip
+        "{{ venv_dir }}/bin/pip" install -r requirements.txt
+      args:
+        executable: /bin/bash
+      register: install_out
+
+    - name: Ensure local ansible/logs folder exists
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/logs"
+        state: directory
+        mode: "0755"
+
+    - name: Save install log locally in ansible/logs
+      delegate_to: localhost
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/logs/install_{{ inventory_hostname }}.txt"
+        content: |
+          === INSTALL LOG FOR {{ inventory_hostname }} ===
+
+          STDOUT:
+          {{ install_out.stdout }}
+
+          STDERR:
+          {{ install_out.stderr }}

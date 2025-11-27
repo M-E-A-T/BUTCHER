@@ -23,7 +23,7 @@ SMOOTH_HISTORY = 8         # running average length for BPM smoothing
 OSC_PORT      = 9000
 OSC_ADDR      = "/bpm"          # OSC address for BPM
 OSC_LOCAL_IP  = "127.0.0.1"     # same machine
-OSC_BCAST_IP  = "192.168.8.255" # everyone on your 192.168.8.x LAN
+OSC_BCAST_IP  = "7.7.7.255" # everyone on your 192.168.8.x LAN
 
 osc_local = SimpleUDPClient(OSC_LOCAL_IP, OSC_PORT)
 osc_bcast = SimpleUDPClient(OSC_BCAST_IP, OSC_PORT, allow_broadcast=True)
