@@ -35,6 +35,11 @@ ansible-playbook -i ansible/config/hosts.ini ansible/runButcher.yml
 
 
 
+brew install numpy
+brew install opencv
+pip3 install --break-system-packages python-osc
+brew install portaudio
+pip3 install --break-system-packages pyaudio
 
 
 ansible-playbook -i ansible/config/hosts.ini killEverything.yml
