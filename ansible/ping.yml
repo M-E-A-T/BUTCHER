@@ -1,6 +1,6 @@
 ---
 - name: Test connectivity with ping
-  hosts: all
+  hosts: meatops
   gather_facts: no
 
   tasks:

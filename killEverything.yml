@@ -1,0 +1,27 @@
+---
+# ============================================================
+# PLAY 1 — RUN visualReceiver.py ON REMOTE HOSTS (ASYNC) USING VENV
+# ============================================================
+- name: Start visualReceiver on remote hosts
+  hosts: meatops
+  gather_facts: no
+
+  tasks:
+
+
+    - name: Kill spython
+      ansible.builtin.command: killall python
+      ignore_errors: yes
+
+
+
+    # - name: Run OpenCV motion script on Pi display
+    #   become: true
+    #   become_user: student
+      
+    #   ansible.builtin.command: python3 {{ python_path }} 
+    #   async: 3600
+    #   poll: 0
+
+
+    

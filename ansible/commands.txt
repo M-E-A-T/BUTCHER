@@ -14,3 +14,29 @@ RUN PING
 RUN INSTALL python
 RUN INSTALL REQUIREMENTS 
 RUN BUTCHER
+
+
+
+
+
+
+
+
+
+
+sudo apt update
+sudo apt install openssh-server -y 
+sudo systemctl start ssh
+
+
+MAKE SURE TO HAVE INSTALLED SSH PASS 
+brew install sshpass 
+./ansible/setup_all_hosts.sh
+
+
+ansible-playbook -i ansible/config/hosts.ini ansible/setup_ssh_keys.yml
+ansible-playbook -i ansible/config/hosts.ini sync_files.yml
+ansible-playbook -i ansible/config/hosts.ini ansible/install_python.yml --ask-become-pass
+ansible-playbook -i ansible/config/hosts.ini ansible/install_requirements.yml
+ansible-playbook -i ansible/config/hosts.ini ansible/runButcher.yml
+
