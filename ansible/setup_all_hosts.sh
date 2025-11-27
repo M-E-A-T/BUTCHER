@@ -1,12 +1,16 @@
 #!/bin/bash
-#make sure to install ssh pass 3 8 9 21 are weird
-
-# 3 is 209 needs to become 203 temp 231
-# 8 is 203 needs to become 208 temp 232
-# 9 is 208 needs to become 209 temp 233
-
+# Ensure SSH key exists + install SSH keys with sshpass
 
 PASSWORD="meat"
+
+# generate key if none exists
+if [ ! -f "$HOME/.ssh/id_ed25519" ] && [ ! -f "$HOME/.ssh/id_rsa" ]; then
+    echo "=== No SSH identities found. Generating one... ==="
+    ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519"
+    echo "=== Key generated successfully ==="
+else
+    echo "=== SSH identity already exists ==="
+fi
 
 hosts=(
 "7.7.7.201 meat01"
@@ -34,19 +38,17 @@ for entry in "${hosts[@]}"; do
 
     echo "----- $ip ($user) -----"
 
-    # Remove old host fingerprint
+    # Remove old fingerprint
     ssh-keygen -R "$ip" >/dev/null 2>&1
 
-    # Automatically push your SSH key (no password prompts)
+    # Push SSH key
     sshpass -p "$PASSWORD" ssh-copy-id \
         -o StrictHostKeyChecking=no \
         "$user@$ip"
 
-    # Test the connection
+    # Test login
     sshpass -p "$PASSWORD" ssh \
         -o StrictHostKeyChecking=no \
-        -o PasswordAuthentication=yes \
-        -o BatchMode=no \
         "$user@$ip" "echo OK" 2>/dev/null
 
     if [ $? -eq 0 ]; then

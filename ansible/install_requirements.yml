@@ -9,6 +9,33 @@
     #   when: ansible_os_family == "RedHat"
 
 
+- name: Create venv and install requirements into it
+  hosts: meatops
+  gather_facts: no
+
+  vars:
+    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+    project_ansible_dir: "{{ project_root }}/ansible"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+
+    - name: Create virtual environment if it does not exist
+      ansible.builtin.shell: |
+        python3 -m venv "{{ venv_dir }}"
+      args:
+        executable: /bin/bash
+        creates: "{{ venv_dir }}/bin/activate"
+
+    - name: Install requirements into venv
+      ansible.builtin.shell: |
+        cd "{{ project_ansible_dir }}"
+        "{{ venv_dir }}/bin/pip" install --upgrade pip
+        "{{ venv_dir }}/bin/pip" install -r requirements.txt
+      args:
+        executable: /bin/bash
+      register: install_out
+
 # ============================================================
 # PLAY 2 — CREATE VENV AND INSTALL REQUIREMENTS INTO IT
 # ============================================================
