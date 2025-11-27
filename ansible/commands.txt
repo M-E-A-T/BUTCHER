@@ -7,20 +7,13 @@ python3 detection/flux.py
 
 THEN, FROM THE 
 
-ansible-playbook -i ansible/config/hosts.ini ansible/ping.yml
+ansible-playbook -i ansible/config/hosts.ini ping.yml
 
 RUN SETUP_SSH_KEYS
 RUN PING
 RUN INSTALL python
 RUN INSTALL REQUIREMENTS 
 RUN BUTCHER
-
-
-
-
-
-
-
 
 
 
@@ -40,3 +33,8 @@ ansible-playbook -i ansible/config/hosts.ini ansible/install_python.yml --ask-be
 ansible-playbook -i ansible/config/hosts.ini ansible/install_requirements.yml
 ansible-playbook -i ansible/config/hosts.ini ansible/runButcher.yml
 
+
+
+
+
+ansible-playbook -i ansible/config/hosts.ini killEverything.yml

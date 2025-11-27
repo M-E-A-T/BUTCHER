@@ -1,0 +1,32 @@
+=== INSTALL LOG FOR 7.7.7.209 ===
+
+STDOUT:
+Requirement already satisfied: pip in /home/meat09/Desktop/BUTCHER/.venv/lib/python3.12/site-packages (24.0)
+Collecting pip
+  Downloading pip-25.3-py3-none-any.whl.metadata (4.7 kB)
+Downloading pip-25.3-py3-none-any.whl (1.8 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 2.1 MB/s eta 0:00:00
+Installing collected packages: pip
+  Attempting uninstall: pip
+    Found existing installation: pip 24.0
+    Uninstalling pip-24.0:
+      Successfully uninstalled pip-24.0
+Successfully installed pip-25.3
+Collecting opencv-contrib-python (from -r requirements.txt (line 1))
+  Downloading opencv_contrib_python-4.12.0.88-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (19 kB)
+Collecting numpy (from -r requirements.txt (line 2))
+  Downloading numpy-2.3.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (62 kB)
+Collecting python-osc (from -r requirements.txt (line 3))
+  Downloading python_osc-1.9.3-py3-none-any.whl.metadata (6.4 kB)
+Collecting numpy (from -r requirements.txt (line 2))
+  Downloading numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (62 kB)
+Downloading opencv_contrib_python-4.12.0.88-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (73.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 73.2/73.2 MB 1.7 MB/s  0:00:37
+Downloading numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (16.5 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.5/16.5 MB 1.1 MB/s  0:00:14
+Downloading python_osc-1.9.3-py3-none-any.whl (43 kB)
+Installing collected packages: python-osc, numpy, opencv-contrib-python
+
+Successfully installed numpy-2.2.6 opencv-contrib-python-4.12.0.88 python-osc-1.9.3
+
+STDERR:

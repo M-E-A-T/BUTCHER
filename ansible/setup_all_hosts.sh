@@ -1,11 +1,18 @@
 #!/bin/bash
 #make sure to install ssh pass 3 8 9 21 are weird
 
+# 3 is 209 needs to become 203 temp 231
+# 8 is 203 needs to become 208 temp 232
+# 9 is 208 needs to become 209 temp 233
+
+
 PASSWORD="meat"
 
 hosts=(
 "7.7.7.201 meat01"
-
+"7.7.7.203 meat03"
+"7.7.7.208 meat08"
+"7.7.7.209 meat09"
 "7.7.7.210 meat10"
 "7.7.7.211 meat11"
 "7.7.7.214 meat14"
@@ -14,6 +21,7 @@ hosts=(
 "7.7.7.218 meat18"
 "7.7.7.219 meat19"
 "7.7.7.220 meat20"
+"7.7.7.221 meat-21"
 "7.7.7.222 meat22"
 "7.7.7.224 meat24"
 )

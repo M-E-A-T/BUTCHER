@@ -1,4 +1,11 @@
 [OSC] Listening on port 9000...
+[OSC] FLUX = 5
+[OSC] FLUX = 5
+[OSC] FLUX = 5
+[OSC] FLUX = 5
+[OSC] FLUX = 5
+[OSC] FLUX = 6
+[OSC] FLUX = 6
 [OSC] FLUX = 6
 [OSC] FLUX = 5
 [OSC] FLUX = 6
@@ -10,8 +17,8 @@
 [OSC] FLUX = 4
 [OSC] FLUX = 6
 [OSC] FLUX = 6
-[OSC] FLUX = 6
 [OSC] FLUX = 5
+[OSC] FLUX = 6
 [OSC] FLUX = 5
 [OSC] FLUX = 6
 [OSC] FLUX = 5
@@ -56,9 +63,6 @@
 [OSC] FLUX = 3
 [OSC] FLUX = 3
 [OSC] FLUX = 3
-[OSC] FLUX = 4
-[OSC] FLUX = 3
-[OSC] FLUX = 4
 
 === VIDEO FILTER ENGINE RUNNING ===
 Press Q to quit.
@@ -68,6 +72,9 @@ Press Q to quit.
 [OSC] FLUX = 4
 [OSC] FLUX = 4
 [OSC] FLUX = 3
+[OSC] FLUX = 4
+[OSC] FLUX = 4
+[OSC] FLUX = 3
 [OSC] FLUX = 3
 [OSC] FLUX = 3
 [OSC] FLUX = 3
@@ -220,7 +227,6 @@ Press Q to quit.
 [OSC] FLUX = 5
 [OSC] FLUX = 4
 [OSC] FLUX = 6
-[OSC] FLUX = 5
 [OSC] FLUX = 5
 [OSC] FLUX = 4
 [OSC] FLUX = 5
@@ -265,6 +271,7 @@ Press Q to quit.
 [OSC] FLUX = 5
 [OSC] FLUX = 5
 [OSC] FLUX = 6
+[OSC] FLUX = 6
 [OSC] FLUX = 5
 [OSC] FLUX = 4
 [OSC] FLUX = 4
@@ -457,7 +464,6 @@ Press Q to quit.
 [OSC] FLUX = 5
 [OSC] FLUX = 5
 [OSC] FLUX = 5
-[OSC] FLUX = 4
 [OSC] FLUX = 4
 [OSC] FLUX = 4
 [OSC] FLUX = 4
@@ -536,9 +542,3 @@ Press Q to quit.
 [OSC] FLUX = 4
 [OSC] FLUX = 6
 [OSC] FLUX = 5
-[OSC] FLUX = 8
-[OSC] FLUX = 7
-[OSC] FLUX = 6
-[OSC] FLUX = 5
-[OSC] FLUX = 5
-[OSC] FLUX = 4

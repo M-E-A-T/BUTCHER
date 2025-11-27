@@ -1,5 +1,25 @@
 ---
 # ============================================================
+# PLAY 0 — RUN flux.py ON LOCALHOST ONLY
+# ============================================================
+- name: Run flux on localhost
+  hosts: localhost
+  gather_facts: no
+  connection: local
+
+  tasks:
+
+
+    - name: Kill spython
+      ansible.builtin.command: killall python
+      ignore_errors: yes
+
+    - name: Kill spython
+      ansible.builtin.command: killall python3
+      ignore_errors: yes
+
+
+# ============================================================
 # PLAY 1 — RUN visualReceiver.py ON REMOTE HOSTS (ASYNC) USING VENV
 # ============================================================
 - name: Start visualReceiver on remote hosts
