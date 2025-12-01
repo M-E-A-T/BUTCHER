@@ -8,7 +8,6 @@ python3 detection/flux.py
 
 THEN, FROM THE 
 
-ansible-playbook -i ansible/config/hosts.ini ping.yml
 
 RUN SETUP_SSH_KEYS
 RUN PING
@@ -28,6 +27,7 @@ brew install sshpass
 ./ansible/setup_all_hosts.sh
 
 
+ansible-playbook -i ansible/config/hosts.ini ping.yml
 ansible-playbook -i ansible/config/hosts.ini ansible/setup_ssh_keys.yml
 ansible-playbook -i ansible/config/hosts.ini sync_files.yml
 ansible-playbook -i ansible/config/hosts.ini ansible/install_python.yml --ask-become-pass
@@ -36,6 +36,11 @@ ansible-playbook -i ansible/config/hosts.ini ansible/runButcher.yml
 
 
 
+brew install numpy
+brew install opencv
+pip3 install --break-system-packages python-osc
+brew install portaudio
+pip3 install --break-system-packages pyaudio
 
 
 ansible-playbook -i ansible/config/hosts.ini killEverything.yml

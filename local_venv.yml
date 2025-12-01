@@ -1,0 +1,26 @@
+- name: Create venv and install requirements locally
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars:
+    project_root: "{{ playbook_dir }}"
+    project_ansible_dir: "{{ project_root }}/ansible"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+
+    - name: Create virtual environment if it does not exist
+      ansible.builtin.command: python3 -m venv "{{ venv_dir }}"
+      args:
+        creates: "{{ venv_dir }}/bin/activate"
+
+    - name: Upgrade pip inside venv
+      ansible.builtin.command: "{{ venv_dir }}/bin/pip install --upgrade pip"
+      args:
+        chdir: "{{ project_ansible_dir }}"
+
+    - name: Install requirements into venv
+      ansible.builtin.command: "{{ venv_dir }}/bin/pip install -r requirements.txt"
+      args:
+        chdir: "{{ project_ansible_dir }}"
