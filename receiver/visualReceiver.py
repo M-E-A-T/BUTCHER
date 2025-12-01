@@ -20,14 +20,7 @@ stop_flag = False
 # PATHS
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-#video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
-
-video_choices = [
-    os.path.join(BASE_DIR, "..", "media", "test.mp4"),
-    os.path.join(BASE_DIR, "..", "media", "test2.mp4")
-]
-
-video_path = random.choice(video_choices)
+video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
 
 # ============================================================
 # FILTER STACK
