@@ -17,9 +17,9 @@ WINDOW_SIZE_MULTIPLE = 1   # not used for flux, but left for consistency
 
 # OSC CONFIG
 OSC_PORT      = 9000
-OSC_ADDR      = "/flux"          # OSC address for FLUX
-OSC_LOCAL_IP  = "127.0.0.1"      # same machine
-OSC_BCAST_IP  = "7.7.7.255"  # LAN broadcast
+OSC_ADDR      = "/flux"
+OSC_LOCAL_IP  = "127.0.0.1"
+OSC_BCAST_IP  = "7.7.7.255"   # LAN broadcast
 
 osc_local = SimpleUDPClient(OSC_LOCAL_IP, OSC_PORT)
 osc_bcast = SimpleUDPClient(OSC_BCAST_IP, OSC_PORT, allow_broadcast=True)
@@ -34,7 +34,11 @@ prev_spectrum  = None
 smoothed_flux  = None
 FLUX_SMOOTH    = 0.2
 
-stop_flag = False   # <-- press q to set this and stop
+stop_flag = False
+
+# dynamic normalization globals
+flux_min = 1e9
+flux_max = 0.0
 
 
 # ==============================
@@ -47,8 +51,8 @@ def list_audio_devices(pa):
     print("="*60)
 
     input_devices = []
-
     device_count = pa.get_device_count()
+
     for idx in range(device_count):
         info = pa.get_device_info_by_index(idx)
         if info.get('maxInputChannels', 0) > 0:
@@ -56,6 +60,7 @@ def list_audio_devices(pa):
             name = info.get('name', 'Unknown')
             chans = info.get('maxInputChannels', 0)
             sr = int(info.get('defaultSampleRate', 0))
+
             print(f"[{idx}] {name}")
             print(f"    Channels: {chans}, Sample Rate: {sr} Hz\n")
 
@@ -71,7 +76,7 @@ def select_device(pa):
         print("ERROR: No input devices found!")
         sys.exit(1)
 
-    # --------- SELECT DEVICE INDEX ----------
+    # --------- SELECT DEVICE ----------
     while True:
         try:
             choice = input("Select device index (or 'q' to quit): ").strip()
@@ -91,52 +96,39 @@ def select_device(pa):
                 print(f"Sample Rate: {sr} Hz")
                 print(f"Available Channels: {chans}")
                 break
+
             else:
                 print(f"Invalid device index. Choose from: {input_devices}")
-        except ValueError:
-            print("Enter a valid number.")
-        except EOFError:
-            print("\nEOF on stdin, exiting.")
-            sys.exit(1)
-        except KeyboardInterrupt:
-            print("\nExiting...")
-            sys.exit(0)
 
-    max_channels = chans
-    num_channels = max_channels
+        except:
+            print("Enter a valid number.")
+
+    num_channels = chans
     audioInputSampleRate = sr
-    selected_channel = None
 
     # --------- SELECT CHANNEL ----------
-    if max_channels > 1:
-        print(f"\nDevice has {max_channels} input channels\n")
-
-        for i in range(max_channels):
+    if num_channels > 1:
+        print(f"\nDevice has {num_channels} input channels\n")
+        for i in range(num_channels):
             print(f"  [{i+1}] Input {i+1}")
 
         while True:
             try:
-                channel_choice = input(f"\nSelect input (1-{max_channels}) or 'q' to quit: ").strip()
+                channel_choice = input(f"\nSelect input (1-{num_channels}) or 'q' to quit: ").strip()
                 if channel_choice.lower() == 'q':
                     print("Exiting by user request.")
                     sys.exit(0)
 
                 channel_num = int(channel_choice)
-
-                if 1 <= channel_num <= max_channels:
+                if 1 <= channel_num <= num_channels:
                     selected_channel = channel_num - 1
                     print(f"Using Input {channel_num}\n")
                     break
                 else:
-                    print(f"Enter a number between 1 and {max_channels}")
-            except ValueError:
+                    print(f"Enter a number between 1 and {num_channels}")
+
+            except:
                 print("Enter a valid number.")
-            except EOFError:
-                print("\nEOF on stdin, exiting.")
-                sys.exit(1)
-            except KeyboardInterrupt:
-                print("\nExiting...")
-                sys.exit(0)
     else:
         selected_channel = 0
         print("Using single input channel\n")
@@ -145,7 +137,7 @@ def select_device(pa):
 
 
 # ==============================
-# FLUX SYSTEM
+# FLUX SYSTEM (RMS-normalized)
 # ==============================
 
 def compute_spectral_flux(signal):
@@ -153,7 +145,14 @@ def compute_spectral_flux(signal):
 
     # Hanning window
     window = np.hanning(len(signal))
-    spectrum = np.abs(np.fft.rfft(signal * window))
+    x = signal * window
+
+    # Normalize by RMS → gain invariant
+    rms = np.sqrt(np.mean(x**2))
+    if rms > 1e-8:
+        x = x / rms
+
+    spectrum = np.abs(np.fft.rfft(x))
 
     if prev_spectrum is None:
         prev_spectrum = spectrum
@@ -174,23 +173,22 @@ def compute_spectral_flux(signal):
 
 def readAudioFrames(in_data, frame_count, time_info, status):
     global smoothed_flux, selected_channel, num_channels, stop_flag
+    global flux_min, flux_max
 
     if stop_flag:
-        # Tell PyAudio to stop the stream
         return (in_data, pyaudio.paComplete)
 
-    # Convert bytes -> float32 array
+    # Convert bytes → float32
     signal = np.frombuffer(in_data, dtype=np.float32)
 
-    # Handle multi-channel: de-interleave & pick the selected channel
+    # Handle multi-channel
     if num_channels and num_channels > 1:
         try:
             signal = signal.reshape(-1, num_channels)[:, selected_channel]
-        except ValueError:
-            # fallback if reshape fails
+        except:
             signal = signal[::num_channels]
 
-    # Compute spectral flux
+    # Compute flux
     flux_raw = compute_spectral_flux(signal)
 
     # Smooth it
@@ -199,12 +197,27 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     else:
         smoothed_flux = (1 - FLUX_SMOOTH) * smoothed_flux + FLUX_SMOOTH * flux_raw
 
-    flux_int = int(smoothed_flux)
+    # ==============================
+    # DYNAMIC NORMALIZATION: 0..1000
+    # ==============================
+    if smoothed_flux > 1e-6:
+        if smoothed_flux < flux_min:
+            flux_min = smoothed_flux
+        if smoothed_flux > flux_max:
+            flux_max = smoothed_flux
 
-    # Print
+    if flux_max > flux_min:
+        norm = (smoothed_flux - flux_min) / (flux_max - flux_min)
+    else:
+        norm = 0.0
+
+    norm = np.clip(norm, 0.0, 1.0)
+    flux_int = int(norm * 1000)
+    # ==============================
+
     print(f"{flux_int}", flush=True)
 
-    # OSC send
+    # Send OSC
     osc_local.send_message(OSC_ADDR, flux_int)
     osc_bcast.send_message(OSC_ADDR, flux_int)
 
@@ -212,27 +225,21 @@ def readAudioFrames(in_data, frame_count, time_info, status):
 
 
 # ==============================
-# KEYBOARD LISTENER (q to quit)
+# KEYBOARD LISTENER
 # ==============================
 
 def keyboard_listener():
-    """
-    Waits for 'q' + Enter on stdin and sets stop_flag.
-    This lets you quit cleanly without Ctrl+C.
-    """
     global stop_flag
     try:
         while not stop_flag:
             line = sys.stdin.readline()
             if not line:
-                # EOF (e.g. non-interactive env) -> just exit listener
                 break
             if line.strip().lower() == 'q':
                 print("\n[q] Quit requested.")
                 stop_flag = True
                 break
-    except Exception:
-        # Don't kill the main program if stdin is weird
+    except:
         pass
 
 
@@ -244,23 +251,18 @@ def main():
     global selected_device_index, stop_flag
 
     print("\nReal-time Spectral Flux → OSC (/flux)")
-    print("Prints Flux every block")
-    print(f"Sending OSC on {OSC_ADDR}")
+    print("Sending OSC:")
     print(f"  → local:     {OSC_LOCAL_IP}:{OSC_PORT}")
-    print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}")
-    print("Press 'q' then Enter to stop (after the stream starts), or Ctrl+C anytime.\n")
+    print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}\n")
 
     pa = pyaudio.PyAudio()
 
     try:
-        # 1) First, interactively choose device & channel
         selected_device_index = select_device(pa)
 
-        # 2) AFTER THAT, start the keyboard listener
         kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
         kb_thread.start()
 
-        # 3) Create and start the input stream
         inputStream = pa.open(
             format=pyaudio.paFloat32,
             input=True,
@@ -273,7 +275,6 @@ def main():
 
         inputStream.start_stream()
 
-        # Main loop: run until stream stops or stop_flag is set
         while inputStream.is_active() and not stop_flag:
             sleep(0.1)
 
@@ -284,15 +285,14 @@ def main():
     finally:
         stop_flag = True
         try:
-            if 'inputStream' in locals():
-                inputStream.stop_stream()
-                inputStream.close()
-        except Exception:
+            inputStream.stop_stream()
+            inputStream.close()
+        except:
             pass
 
         pa.terminate()
         print("Audio stream closed.")
-        print("OSC clients cleaned up (no server port was bound).")
+        print("Done.")
 
 
 if __name__ == "__main__":

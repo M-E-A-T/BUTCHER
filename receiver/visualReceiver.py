@@ -54,7 +54,7 @@ def got_flux(addr, flux_value):
         current_flux = int(flux_value)
     except:
         return
-    #print(f"[OSC] FLUX = {current_flux}")
+    print(f"[OSC] FLUX = {current_flux}")
 
 # ============================================================
 # SAFE OSC SERVER (start & clean shutdown)
@@ -169,12 +169,41 @@ def apply_colormap(frame):
 # ============================================================
 # MAPPING
 # ============================================================
-def laplacian_count_from_flux(n):
-    if n < 10: return 1
-    if n < 15: return 2
-    if n < 20: return 3
-    if n < 25: return 4
-    return 5
+def count_from_flux(n, mode):
+    if mode == "laplacian":
+        if n < 100: return 1
+        if n < 200: return 2
+        if n < 300: return 3
+        if n < 400: return 3
+        if n < 500: return 5
+        if n < 600: return 5
+        if n < 700: return 7
+        if n < 800: return 7
+        if n < 900: return 9
+        return 9
+    if mode == "morph_gradient":
+        if n < 100: return 1
+        if n < 200: return 2
+        if n < 300: return 3
+        if n < 400: return 4
+        if n < 500: return 5
+        if n < 600: return 7
+        if n < 700: return 9
+        if n < 800: return 11
+        if n < 900: return 13
+        return 15
+    if mode == "sobel":
+        if n < 100: return 1
+        if n < 200: return 3
+        if n < 300: return 3
+        if n < 400: return 4
+        if n < 500: return 5
+        if n < 600: return 6
+        if n < 700: return 7
+        if n < 800: return 8
+        if n < 900: return 9
+        return 10
+    else: return 0
 
 def apply_filter_by_name(frame, name):
     return {
@@ -220,7 +249,7 @@ def apply_filter_stack(frame, filters, mode):
             mode = modeDict[modeIndex + 1]
             modeIndex+=1
             #print(modeIndex)
-    for _ in range(laplacian_count_from_flux(current_flux)):
+    for _ in range(count_from_flux(current_flux, mode)):
    
         if mode == "laplacian":
             out = apply_laplacian(out)
@@ -282,11 +311,8 @@ while not stop_flag:
     elif key == ord('1'):
         print("here")
         mode="laplacian"
-
-    elif key == ord('2'):
-        mode="sobel"
         
-    elif key == ord('3'):
+    elif key == ord('2'):
         mode="morph_gradient"
         
 
