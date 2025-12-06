@@ -20,7 +20,7 @@ stop_flag = False
 # PATHS
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
+video_path = os.path.join(BASE_DIR, "..", "media", "test2.mp4")
 
 # ============================================================
 # FILTER STACK
@@ -54,7 +54,7 @@ def got_flux(addr, flux_value):
         current_flux = int(flux_value)
     except:
         return
-    print(f"[OSC] FLUX = {current_flux}")
+    #print(f"[OSC] FLUX = {current_flux}")
 
 # ============================================================
 # SAFE OSC SERVER (start & clean shutdown)
@@ -171,7 +171,9 @@ def apply_colormap(frame):
 # ============================================================
 def laplacian_count_from_flux(n):
     if n < 10: return 1
+    if n < 15: return 2
     if n < 20: return 3
+    if n < 25: return 4
     return 5
 
 def apply_filter_by_name(frame, name):
@@ -195,17 +197,37 @@ def apply_filter_by_name(frame, name):
 # ============================================================
 # APPLY FILTER STACK
 # ============================================================
-def apply_filter_stack(frame, filters):
+def apply_filter_stack(frame, filters, mode):
     out = frame
 
-    # Apply base filters
-    base = [f for f in filters if f not in ("laplacian", "colormap")]
-    for f in base:
-        out = apply_filter_by_name(out, f)
-
+   
+    # SOBEL 
+    # LAPLACIAN
+    # MORPH GRADIENT
     # Flux → laplacian passes
+    modeDict = ["laplacian", "sobel", "morph_gradient"]
+    modeIndex = modeDict.index(mode)
+
+
+    if current_flux == 0:
+        #print("change mode")
+        
+        if modeIndex == len(modeDict) - 1:
+            print("route 1")
+            mode = modeDict[0]
+        else:
+            #print(mode)
+            mode = modeDict[modeIndex + 1]
+            modeIndex+=1
+            #print(modeIndex)
     for _ in range(laplacian_count_from_flux(current_flux)):
-        out = apply_laplacian(out)
+   
+        if mode == "laplacian":
+            out = apply_laplacian(out)
+        elif mode == "sobel":
+            out = apply_sobel(out)
+        elif mode == "morph_gradient":
+            out = apply_morph_gradient(out)
 
     # Always colormap last
     #out = apply_colormap(out)
@@ -232,9 +254,10 @@ frozen_frame = None
 print("\n=== VIDEO FILTER ENGINE RUNNING ===")
 print("Press Q to quit.\n")
 
+mode = "laplacian"
 while not stop_flag:
     now = time.time()
-
+    
     if current_speed > 0:
         if now - last_time >= frame_time / current_speed:
             last_time = now
@@ -244,7 +267,7 @@ while not stop_flag:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            filtered = apply_filter_stack(frame, active_filters)
+            filtered = apply_filter_stack(frame, active_filters, mode)
             frozen_frame = filtered
             cv2.imshow("Video Filters", filtered)
 
@@ -256,6 +279,17 @@ while not stop_flag:
     if key == ord('q'):
         stop_flag = True
         break
+    elif key == ord('1'):
+        print("here")
+        mode="laplacian"
+
+    elif key == ord('2'):
+        mode="sobel"
+        
+    elif key == ord('3'):
+        mode="morph_gradient"
+        
+
 
 # ============================================================
 # CLEAN EXIT

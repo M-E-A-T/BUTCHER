@@ -16,11 +16,15 @@ current_speed = 1.0
 current_flux = 0
 stop_flag = False
 
+# which edge mode we're in:
+# "laplacian", "sobel", "canny", "morph_gradient"
+current_mode = "laplacian"
+
 # ============================================================
 # PATHS
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-video_path = os.path.join(BASE_DIR, "..", "media", "test2.mp4")
+video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
 
 # ============================================================
 # FILTER STACK
@@ -152,104 +156,81 @@ def apply_sharpen(frame):
     kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
     return cv2.filter2D(frame, -1, kernel)
 
-# ============================================================
-# COLORMAP LOGIC DRIVEN BY FLUX
-# ============================================================
-# Base list (for reference, not strictly needed for logic)
-COLORMAPS = [
-    (cv2.COLORMAP_AUTUMN,  "AUTUMN"),
-    (cv2.COLORMAP_BONE,    "BONE"),
-    (cv2.COLORMAP_JET,     "JET"),
-    (cv2.COLORMAP_WINTER,  "WINTER"),
-    (cv2.COLORMAP_RAINBOW, "RAINBOW"),
-    (cv2.COLORMAP_OCEAN,   "OCEAN"),
-    (cv2.COLORMAP_SUMMER,  "SUMMER"),
-    (cv2.COLORMAP_SPRING,  "SPRING"),
-    (cv2.COLORMAP_COOL,    "COOL"),
-    (cv2.COLORMAP_HSV,     "HSV"),
-    (cv2.COLORMAP_PINK,    "PINK"),
-    (cv2.COLORMAP_HOT,     "HOT"),
-    (cv2.COLORMAP_PARULA,  "PARULA"),
-    (cv2.COLORMAP_MAGMA,   "MAGMA"),
-    (cv2.COLORMAP_INFERNO, "INFERNO"),
-    (cv2.COLORMAP_PLASMA,  "PLASMA"),
-    (cv2.COLORMAP_VIRIDIS, "VIRIDIS"),
-    (cv2.COLORMAP_CIVIDIS, "CIVIDIS"),
-    (cv2.COLORMAP_TWILIGHT, "TWILIGHT"),
-    (cv2.COLORMAP_TWILIGHT_SHIFTED, "TWILIGHT_SHIFTED"),
-    (cv2.COLORMAP_TURBO,   "TURBO"),
-    (cv2.COLORMAP_DEEPGREEN, "DEEPGREEN"),
-]
-
 def apply_colormap(frame):
-    """
-    Flux → colormap:
-      flux < 10  → BONE
-      10–19      → random HOT / COOL
-      >= 20      → random DEEPGREEN / HOT / COOL / SPRING / MAGMA
-    """
-    global current_flux
-
-    if current_flux < 10:
-        cmap = cv2.COLORMAP_BONE
-    elif current_flux < 20:
-        cmap = random.choice([cv2.COLORMAP_HOT, cv2.COLORMAP_COOL])
-    else:
-        cmap = random.choice([
-            cv2.COLORMAP_DEEPGREEN,
-            cv2.COLORMAP_HOT,
-            cv2.COLORMAP_COOL,
-            cv2.COLORMAP_SPRING,
-            cv2.COLORMAP_MAGMA,
-        ])
-
+    COLORMAPS = [
+        cv2.COLORMAP_AUTUMN, cv2.COLORMAP_BONE, cv2.COLORMAP_JET,
+        cv2.COLORMAP_WINTER, cv2.COLORMAP_RAINBOW, cv2.COLORMAP_OCEAN,
+        cv2.COLORMAP_SUMMER, cv2.COLORMAP_SPRING, cv2.COLORMAP_COOL,
+        cv2.COLORMAP_HSV, cv2.COLORMAP_PINK, cv2.COLORMAP_HOT,
+        cv2.COLORMAP_PARULA, cv2.COLORMAP_MAGMA, cv2.COLORMAP_INFERNO,
+        cv2.COLORMAP_PLASMA, cv2.COLORMAP_VIRIDIS, cv2.COLORMAP_CIVIDIS,
+        cv2.COLORMAP_TWILIGHT, cv2.COLORMAP_TWILIGHT_SHIFTED,
+        cv2.COLORMAP_TURBO, cv2.COLORMAP_DEEPGREEN,
+    ]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return cv2.applyColorMap(gray, cmap)
+    return cv2.applyColorMap(gray, random.choice(COLORMAPS))
 
 # ============================================================
 # MAPPING
 # ============================================================
 def laplacian_count_from_flux(n):
-    # Exactly your original logic
     if n < 10: return 1
+    if n < 15: return 2
     if n < 20: return 3
+    if n < 25: return 4
     return 5
 
 def apply_filter_by_name(frame, name):
     return {
-        "sobel":           apply_sobel,
-        "scharr":          apply_scharr,
-        "laplacian":       apply_laplacian,
-        "canny":           apply_canny,
-        "gaussian":        apply_gaussian,
-        "median":          apply_median,
-        "bilateral":       apply_bilateral,
-        "stylization":     apply_stylization,
-        "pencil":          apply_pencil,
-        "detail":          apply_detail_enhance,
-        "edge_preserve":   apply_edge_preserving,
-        "morph_gradient":  apply_morph_gradient,
-        "sharpen":         apply_sharpen,
-        "colormap":        apply_colormap,
+        "sobel": apply_sobel,
+        "scharr": apply_scharr,
+        "laplacian": apply_laplacian,
+        "canny": apply_canny,
+        "gaussian": apply_gaussian,
+        "median": apply_median,
+        "bilateral": apply_bilateral,
+        "stylization": apply_stylization,
+        "pencil": apply_pencil,
+        "detail": apply_detail_enhance,
+        "edge_preserve": apply_edge_preserving,
+        "morph_gradient": apply_morph_gradient,
+        "sharpen": apply_sharpen,
+        "colormap": apply_colormap,
     }.get(name, lambda f: f)(frame)
 
 # ============================================================
 # APPLY FILTER STACK
 # ============================================================
 def apply_filter_stack(frame, filters):
+    global current_mode
     out = frame
 
-    # 1) Laplacian FIRST, passes driven by current_flux
-    #for _ in range(laplacian_count_from_flux(current_flux)):
-        #out = apply_laplacian(out)
-
-    # 2) Apply base filters (ignore laplacian + colormap here)
-    base = [f for f in filters if f not in ("laplacian", "colormap")]
+    # Apply base filters (exclude the edge modes + colormap here)
+    base = [
+        f for f in filters
+        if f not in ("laplacian", "sobel", "canny", "morph_gradient", "colormap")
+    ]
     for f in base:
         out = apply_filter_by_name(out, f)
 
-    # 3) Colormap LAST, driven by current_flux
-    out = apply_colormap(out)
+    # EDGE MODE: use flux to decide how many passes
+    count = laplacian_count_from_flux(current_flux)
+
+    for _ in range(count):
+        if current_mode == "laplacian":
+            out = apply_laplacian(out)
+        elif current_mode == "sobel":
+            out = apply_sobel(out)
+        elif current_mode == "canny":
+            out = apply_canny(out)
+        elif current_mode == "morph_gradient":
+            out = apply_morph_gradient(out)
+        else:
+            # fallback: do nothing if mode is invalid
+            break
+
+    # If you want a colormap always at the end for any mode, uncomment:
+    # out = apply_colormap(out)
 
     return out
 
@@ -270,8 +251,12 @@ frame_time = 1.0 / fps
 last_time = time.time()
 frozen_frame = None
 
-print("\n=== VIDEO FILTER ENGINE RUNNING (FLUX → LAPLACIAN + COLORMAP) ===")
-print("Press Q to quit.\n")
+print("\n=== VIDEO FILTER ENGINE RUNNING ===")
+print("Press Q to quit.")
+print("Press 1 → Laplacian mode")
+print("Press 2 → Sobel mode")
+print("Press 3 → Canny mode")
+print("Press 4 → Morph gradient mode\n")
 
 while not stop_flag:
     now = time.time()
@@ -294,9 +279,27 @@ while not stop_flag:
             cv2.imshow("Video Filters", frozen_frame)
 
     key = cv2.waitKey(1) & 0xFF
+
     if key == ord('q'):
         stop_flag = True
         break
+
+    # mode switching
+    elif key == ord('1'):
+        current_mode = "laplacian"
+        print("[MODE] Laplacian")
+
+    elif key == ord('2'):
+        current_mode = "sobel"
+        print("[MODE] Sobel")
+
+    elif key == ord('3'):
+        current_mode = "canny"
+        print("[MODE] Canny")
+
+    elif key == ord('4'):
+        current_mode = "morph_gradient"
+        print("[MODE] Morph gradient")
 
 # ============================================================
 # CLEAN EXIT
