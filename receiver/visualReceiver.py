@@ -13,7 +13,7 @@ from pythonosc.osc_server import BlockingOSCUDPServer
 # ============================================================
 current_bpm = 100.0
 current_speed = 1.0
-current_flux = 0
+current_flux = 0   # expected 0..1000 from your flux script
 stop_flag = False
 
 # ============================================================
@@ -203,7 +203,8 @@ def count_from_flux(n, mode):
         if n < 800: return 8
         if n < 900: return 9
         return 10
-    else: return 0
+    else:
+        return 0
 
 def apply_filter_by_name(frame, name):
     return {
@@ -229,28 +230,61 @@ def apply_filter_by_name(frame, name):
 def apply_filter_stack(frame, filters, mode):
     out = frame
 
-   
-    # SOBEL 
-    # LAPLACIAN
-    # MORPH GRADIENT
-    # Flux → laplacian passes
+    # === NEW: COLORMAP MODE (key '3') ===
+    if mode == "colormap":
+        # current_flux is 0..1000
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+
+        #COLORMAPS = [
+        #     cv2.COLORMAP_AUTUMN, cv2.COLORMAP_BONE, cv2.COLORMAP_JET,
+        #     cv2.COLORMAP_WINTER, cv2.COLORMAP_RAINBOW, cv2.COLORMAP_OCEAN,
+        #     cv2.COLORMAP_SUMMER, cv2.COLORMAP_SPRING, cv2.COLORMAP_COOL,
+        #     cv2.COLORMAP_HSV, cv2.COLORMAP_PINK, cv2.COLORMAP_HOT,
+        #     cv2.COLORMAP_PARULA, cv2.COLORMAP_MAGMA, cv2.COLORMAP_INFERNO,
+        #     cv2.COLORMAP_PLASMA, cv2.COLORMAP_VIRIDIS, cv2.COLORMAP_CIVIDIS,
+        #     cv2.COLORMAP_TWILIGHT, cv2.COLORMAP_TWILIGHT_SHIFTED,
+        #     cv2.COLORMAP_TURBO, cv2.COLORMAP_DEEPGREEN,
+        # ]
+
+        if current_flux < 100:
+            out = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        elif current_flux < 200:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_COOL)
+        elif current_flux < 300:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+        elif current_flux < 400:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_DEEPGREEN)
+        elif current_flux < 500:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+        elif current_flux < 600:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+        elif current_flux < 700:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+        elif current_flux < 800:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_MAGMA)
+        elif current_flux < 900:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_MAGMA)
+        else:
+            # 400–1000: hot
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_TURBO)
+
+        out = apply_gaussian(out)
+
+        return out
+
+    # === EXISTING LOGIC FOR EDGE MODES ===
     modeDict = ["laplacian", "sobel", "morph_gradient"]
     modeIndex = modeDict.index(mode)
 
-
     if current_flux == 0:
-        #print("change mode")
-        
         if modeIndex == len(modeDict) - 1:
             print("route 1")
             mode = modeDict[0]
         else:
-            #print(mode)
             mode = modeDict[modeIndex + 1]
-            modeIndex+=1
-            #print(modeIndex)
+            modeIndex += 1
+
     for _ in range(count_from_flux(current_flux, mode)):
-   
         if mode == "laplacian":
             out = apply_laplacian(out)
         elif mode == "sobel":
@@ -258,8 +292,9 @@ def apply_filter_stack(frame, filters, mode):
         elif mode == "morph_gradient":
             out = apply_morph_gradient(out)
 
-    # Always colormap last
-    #out = apply_colormap(out)
+    # (You can still uncomment this if you ever want colormap after edges)
+    # out = apply_colormap(out)
+
     return out
 
 # ============================================================
@@ -274,19 +309,22 @@ if not cap.isOpened():
 cv2.namedWindow("Video Filters", cv2.WINDOW_NORMAL)
 cv2.setWindowProperty("Video Filters", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-
 fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 frame_time = 1.0 / fps
 last_time = time.time()
 frozen_frame = None
 
 print("\n=== VIDEO FILTER ENGINE RUNNING ===")
-print("Press Q to quit.\n")
+print("Press Q to quit.")
+print("1 = Laplacian mode")
+print("2 = Morph gradient mode")
+print("3 = Colormap mode (gray / cool / hot by flux)\n")
 
 mode = "laplacian"
+
 while not stop_flag:
     now = time.time()
-    
+
     if current_speed > 0:
         if now - last_time >= frame_time / current_speed:
             last_time = now
@@ -309,13 +347,14 @@ while not stop_flag:
         stop_flag = True
         break
     elif key == ord('1'):
-        print("here")
-        mode="laplacian"
-        
+        print("Mode: laplacian")
+        mode = "laplacian"
     elif key == ord('2'):
-        mode="morph_gradient"
-        
-
+        print("Mode: morph_gradient")
+        mode = "morph_gradient"
+    elif key == ord('3'):
+        print("Mode: colormap")
+        mode = "colormap"
 
 # ============================================================
 # CLEAN EXIT
