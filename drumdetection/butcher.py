@@ -601,7 +601,7 @@ def configure_osc():
     if port_input:
         osc_port = int(port_input)
     
-    osc_client = udp_client.SimpleUDPClient(osc_ip, osc_port)
+    osc_client = udp_client.SimpleUDPClient(osc_ip, osc_port, allow_broadcast=True)
     
     print(f"\nOSC configured to send to: {osc_ip}:{osc_port}")
     print("Messages will be sent to:")
