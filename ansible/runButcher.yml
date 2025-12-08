@@ -82,6 +82,63 @@
       async: 86400
       poll: 0
 
+- name: start surveil
+  hosts: trashcan
+  gather_facts: no
+
+  vars:
+    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+
+
+    - name: Kill spython
+      ansible.builtin.command: killall python
+      ignore_errors: yes
+
+
+    - name: Ensure logs directory exists on remote host
+      ansible.builtin.file:
+        path: "{{ project_root }}/logs"
+        state: directory
+        mode: "0755"
+
+    - name: run no sleep or lock scripts
+      ansible.builtin.shell: |
+        ./config/keep_awake.sh
+      args:
+        chdir: "{{ project_root }}"
+        executable: /bin/bash
+      environment:
+        DISPLAY: ":0"
+      async: 86400
+      poll: 0
+
+    - name: Start cctv1 asynchronously (logging to remote .txt, using venv)
+      ansible.builtin.shell: |
+        "{{ venv_dir }}/bin/python" tower/opencv/cctv1.py \
+          > logs/surveil_cctv1{{ inventory_hostname }}.txt 2>&1
+      args:
+        chdir: "{{ project_root }}"
+        executable: /bin/bash
+      environment:
+        DISPLAY: ":0"
+      async: 86400
+      poll: 0
+
+    - name: Start cctv2 asynchronously (logging to remote .txt, using venv)
+      ansible.builtin.shell: |
+        "{{ venv_dir }}/bin/python" tower/opencv/cctv2.py \
+          > logs/surveil_cctv1{{ inventory_hostname }}.txt 2>&1
+      args:
+        chdir: "{{ project_root }}"
+        executable: /bin/bash
+      environment:
+        DISPLAY: ":0"
+      async: 86400
+      poll: 0
+
     # - name: Run OpenCV motion script on Pi display
     #   become: true
     #   become_user: student
@@ -96,6 +153,26 @@
 # ============================================================
 - name: Fetch logs back to the Ansible controller
   hosts: meatops
+  gather_facts: no
+
+  tasks:
+
+    - name: Ensure local ansible/logs folder exists
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/logs"
+        state: directory
+        mode: "0755"
+
+    - name: Fetch remote .txt logs to controller (into ansible/logs)
+      ansible.builtin.fetch:
+        src: "/home/{{ ansible_user }}/Desktop/BUTCHER/logs/visualReceiver_{{ inventory_hostname }}.txt"
+        dest: "{{ playbook_dir }}/logs/"
+        flat: yes
+
+- name: Fetch logs back to the Ansible controller
+  hosts: trashcan
   gather_facts: no
 
   tasks:

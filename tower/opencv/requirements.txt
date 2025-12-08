@@ -1,0 +1,6 @@
+mido
+python-rtmidi
+mediapipe
+opencv-python
+numpy
+
