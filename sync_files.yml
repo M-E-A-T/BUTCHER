@@ -24,4 +24,4 @@
           - "--exclude=.venv/"
           - "--exclude=__pycache__/"
           - "--exclude=.git/"
-          - "--exclude=media
+          - "--exclude=media/"
