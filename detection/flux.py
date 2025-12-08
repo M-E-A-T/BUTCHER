@@ -19,7 +19,7 @@ WINDOW_SIZE_MULTIPLE = 1   # not used for flux, but left for consistency
 OSC_PORT      = 9000
 
 OSC_ADDR      = "/butcher/flux"
-OSC_MODE_ADDR = "/butcher/mode"    # NEW MODE ENDPOINT
+OSC_MODE_ADDR = "/butcher/mode"    # MODE ENDPOINT
 
 OSC_LOCAL_IP  = "127.0.0.1"
 OSC_BCAST_IP  = "7.7.7.255"        # LAN broadcast
@@ -225,8 +225,18 @@ def readAudioFrames(in_data, frame_count, time_info, status):
 
 
 # ==============================
-# MODE SENDER (cycle every 30 sec)
+# MODE SENDER (auto cycle)
 # ==============================
+
+def send_mode_value(mode_val):
+    """Send a mode value (1/2/3) to /butcher/mode on both local + broadcast."""
+    try:
+        print(f"[MODE] Sending {mode_val} on {OSC_MODE_ADDR}", flush=True)
+        osc_local.send_message(OSC_MODE_ADDR, mode_val)
+        osc_bcast.send_message(OSC_MODE_ADDR, mode_val)
+    except Exception as e:
+        print(f"[MODE] Error sending mode {mode_val}: {e}")
+
 
 def mode_sender():
     """
@@ -235,16 +245,8 @@ def mode_sender():
     """
     mode_val = 1
     while not stop_flag:
-        print(f"[MODE] Sending {mode_val} on {OSC_MODE_ADDR}", flush=True)
-        try:
-            osc_local.send_message(OSC_MODE_ADDR, mode_val)
-            osc_bcast.send_message(OSC_MODE_ADDR, mode_val)
-        except Exception as e:
-            print(f"[MODE] Error sending mode: {e}")
-
+        send_mode_value(mode_val)
         sleep(30.0)
-
-        # cycle to next mode
         mode_val = (mode_val % 3) + 1
 
 
@@ -253,18 +255,34 @@ def mode_sender():
 # ==============================
 
 def keyboard_listener():
+    """
+    Read lines from stdin:
+
+      '1', '2', '3' → send /butcher/mode with that value (manual override)
+      'q'           → quit the whole script
+    """
     global stop_flag
     try:
+        print("\nKeyboard controls:")
+        print("  1 / 2 / 3  → send mode to /butcher/mode")
+        print("  q          → quit\n")
+
         while not stop_flag:
             line = sys.stdin.readline()
             if not line:
                 break
-            if line.strip().lower() == 'q':
+
+            cmd = line.strip().lower()
+            if cmd == 'q':
                 print("\n[q] Quit requested.")
                 stop_flag = True
                 break
-    except:
-        pass
+            elif cmd in ('1', '2', '3'):
+                mode_val = int(cmd)
+                send_mode_value(mode_val)
+            # ignore other inputs
+    except Exception as e:
+        print(f"[KEYBOARD] Error: {e}")
 
 
 # ==============================
@@ -276,6 +294,7 @@ def main():
 
     print("\nReal-time Spectral Flux → OSC (/butcher/flux)")
     print("Mode cycling → OSC (/butcher/mode) every 30 seconds")
+    print("Manual modes: type 1 / 2 / 3 + Enter to override\n")
     print("Sending OSC:")
     print(f"  → local:     {OSC_LOCAL_IP}:{OSC_PORT}")
     print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}\n")
@@ -285,10 +304,11 @@ def main():
     try:
         selected_device_index = select_device(pa)
 
+        # Keyboard thread (manual modes + quit)
         kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
         kb_thread.start()
 
-        # Start mode cycling thread
+        # Auto mode cycling thread
         mode_thread = threading.Thread(target=mode_sender, daemon=True)
         mode_thread.start()
 

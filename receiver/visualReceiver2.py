@@ -4,6 +4,7 @@ import threading
 import time
 import random
 import os
+import re
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import BlockingOSCUDPServer
@@ -13,55 +14,127 @@ from pythonosc.osc_server import BlockingOSCUDPServer
 # ============================================================
 current_bpm = 100.0
 current_speed = 1.0
-current_flux = 0
+current_flux = 0   # expected 0..1000 from flux script
 stop_flag = False
 
-# which edge mode we're in:
-# "laplacian", "sobel", "canny", "morph_gradient"
-current_mode = "laplacian"
+# current visual mode (laplacian, morph_gradient, colormap)
+mode = "laplacian"   # default
+
+# Throttling for prints
+last_bpm_print = 0.0
+last_flux_print = 0.0
+last_mode_print = 0.0
 
 # ============================================================
-# PATHS
+# PATHS / VIDEO SELECTION
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
+MEDIA_DIR = os.path.join(BASE_DIR, "..", "media")
+
+print(f"[PATH] Looking in: {MEDIA_DIR}")
+
+video_path = None
+
+try:
+    files = os.listdir(MEDIA_DIR)
+    print(f"[PATH] Found files: {files}")
+except Exception as e:
+    print(f"[ERROR] Cannot read media directory: {e}")
+    exit()
+
+# Regex patterns:
+#   video1, video2, video10...
+#   video_vertical1, video_vertical12...
+pattern_normal   = re.compile(r"^video\d+\.", re.IGNORECASE)
+pattern_vertical = re.compile(r"^video_vertical\d+\.", re.IGNORECASE)
+
+for fname in sorted(files):  # sorted → stable order
+    lower = fname.lower()
+
+    if pattern_normal.match(lower) or pattern_vertical.match(lower):
+        full = os.path.join(MEDIA_DIR, fname)
+        if os.path.isfile(full):
+            video_path = full
+            break
+
+if video_path is None:
+    print("[ERROR] No videos found (expected video<num>.* or video_vertical<num>.*)")
+    exit()
+
+print(f"[VIDEO] Loaded: {video_path}")
 
 # ============================================================
-# FILTER STACK
-# (Define default filters here — no user input anymore)
+# FILTER STACK HOLDER (not heavily used now, but kept for future)
 # ============================================================
-active_filters = [
-    # Example defaults:
-    # "gaussian",
-    # "sobel",
-    # "stylization",
-]
+active_filters = []
 
 # ============================================================
 # OSC CALLBACKS
 # ============================================================
 def got_bpm(addr, bpm_value):
-    global current_bpm, current_speed
+    global current_bpm, current_speed, last_bpm_print
     try:
         bpm_value = float(bpm_value)
     except:
         return
 
     current_bpm = bpm_value
+    # Map BPM to playback speed, then clamp for sanity
     current_speed = 0.0 if bpm_value <= 0 else 1.0 + 0.09 * (bpm_value - 100)
+    current_speed = max(0.0, min(current_speed, 2.0))  # never more than 2x
 
-    print(f"[OSC] BPM = {bpm_value:.2f} → speed = {current_speed:.3f}x")
+    now = time.time()
+    if now - last_bpm_print > 0.5:  # print at most twice per second
+        print(f"[OSC] BPM = {bpm_value:.2f} → speed = {current_speed:.3f}x")
+        last_bpm_print = now
+
 
 def got_flux(addr, flux_value):
-    global current_flux
+    global current_flux, last_flux_print
     try:
         current_flux = int(flux_value)
     except:
         return
-    print(f"[OSC] FLUX = {current_flux}")
+
+    now = time.time()
+    if now - last_flux_print > 0.5:
+        print(f"[OSC] FLUX = {current_flux}")
+        last_flux_print = now
+
+
+def got_mode(addr, mode_value):
+    """
+    /butcher/mode callback
+    1 -> laplacian
+    2 -> morph_gradient
+    3 -> colormap
+    """
+    global mode, last_mode_print
+    try:
+        m = int(mode_value)
+    except:
+        print(f"[OSC] MODE invalid value: {mode_value}")
+        return
+
+    if m == 1:
+        mode = "laplacian"
+    elif m == 2:
+        mode = "morph_gradient"
+    elif m == 3:
+        mode = "colormap"
+    else:
+        # ignore unknown modes
+        print(f"[OSC] MODE unknown int: {m}")
+        return
+
+    now = time.time()
+    if now - last_mode_print > 0.5:
+        print(f"[OSC] MODE = {m} → {mode}")
+        last_mode_print = now
+
 
 # ============================================================
-# SAFE OSC SERVER (start & clean shutdown)
+# START OSC SERVER
 # ============================================================
 osc_server = None
 
@@ -70,19 +143,21 @@ def start_osc():
 
     dispatcher = Dispatcher()
     dispatcher.map("/bpm", got_bpm)
-    dispatcher.map("/flux", got_flux)
+    dispatcher.map("/butcher/flux", got_flux)
+    dispatcher.map("/butcher/mode", got_mode)
 
     osc_server = BlockingOSCUDPServer(("0.0.0.0", 9000), dispatcher)
     print("[OSC] Listening on port 9000...")
+
     try:
         osc_server.serve_forever()
     except Exception as e:
         print(f"[OSC] Server stopped: {e}")
 
+
 def stop_osc():
     global osc_server
     if osc_server:
-        print("[OSC] Shutting down...")
         try:
             osc_server.shutdown()
         except:
@@ -92,147 +167,93 @@ def stop_osc():
         except:
             pass
         osc_server = None
-        print("[OSC] Port released.")
+        print("[OSC] Closed port 9000")
+
 
 osc_thread = threading.Thread(target=start_osc, daemon=True)
 osc_thread.start()
 
 # ============================================================
-# FILTER FUNCTIONS
+# FILTER FUNCTIONS (single-pass helpers)
 # ============================================================
-def apply_sobel(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    sx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
-    sy = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
-    mag = cv2.normalize(cv2.magnitude(sx, sy), None, 0, 255, cv2.NORM_MINMAX)
-    return cv2.cvtColor(mag.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+def apply_sobel_gray(gray):
+    sx = cv2.Sobel(gray, cv2.CV_16S, 1, 0)
+    sy = cv2.Sobel(gray, cv2.CV_16S, 0, 1)
+    mag = cv2.magnitude(sx.astype(np.float32), sy.astype(np.float32))
+    edges = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
+    return edges.astype(np.uint8)
 
-def apply_scharr(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    sx = cv2.Scharr(gray, cv2.CV_64F, 1, 0)
-    sy = cv2.Scharr(gray, cv2.CV_64F, 0, 1)
-    mag = cv2.normalize(cv2.magnitude(sx, sy), None, 0, 255, cv2.NORM_MINMAX)
-    return cv2.cvtColor(mag.astype(np.uint8), cv2.COLOR_GRAY2BGR)
+def apply_laplacian_gray(gray):
+    edges = cv2.Laplacian(gray, cv2.CV_16S, ksize=3)
+    edges = cv2.convertScaleAbs(edges)
+    return edges
 
-def apply_laplacian(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    lap = cv2.convertScaleAbs(cv2.Laplacian(gray, cv2.CV_64F))
-    return cv2.cvtColor(lap, cv2.COLOR_GRAY2BGR)
-
-def apply_canny(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 100, 200)
-    return cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-
-def apply_gaussian(frame):
-    return cv2.GaussianBlur(frame, (15, 15), 3)
-
-def apply_median(frame):
-    return cv2.medianBlur(frame, 9)
-
-def apply_bilateral(frame):
-    return cv2.bilateralFilter(frame, 9, 75, 75)
-
-def apply_stylization(frame):
-    return cv2.stylization(frame)
-
-def apply_pencil(frame):
-    _, sketch = cv2.pencilSketch(frame, sigma_s=60, sigma_r=0.07, shade_factor=0.05)
-    return sketch
-
-def apply_detail_enhance(frame):
-    return cv2.detailEnhance(frame, sigma_s=10, sigma_r=0.15)
-
-def apply_edge_preserving(frame):
-    return cv2.edgePreservingFilter(frame, flags=1, sigma_s=60, sigma_r=0.4)
-
-def apply_morph_gradient(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def apply_morph_gradient_gray(gray):
     kernel = np.ones((5, 5), np.uint8)
-    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
-    return cv2.cvtColor(grad, cv2.COLOR_GRAY2BGR)
-
-def apply_sharpen(frame):
-    kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
-    return cv2.filter2D(frame, -1, kernel)
-
-def apply_colormap(frame):
-    COLORMAPS = [
-        cv2.COLORMAP_AUTUMN, cv2.COLORMAP_BONE, cv2.COLORMAP_JET,
-        cv2.COLORMAP_WINTER, cv2.COLORMAP_RAINBOW, cv2.COLORMAP_OCEAN,
-        cv2.COLORMAP_SUMMER, cv2.COLORMAP_SPRING, cv2.COLORMAP_COOL,
-        cv2.COLORMAP_HSV, cv2.COLORMAP_PINK, cv2.COLORMAP_HOT,
-        cv2.COLORMAP_PARULA, cv2.COLORMAP_MAGMA, cv2.COLORMAP_INFERNO,
-        cv2.COLORMAP_PLASMA, cv2.COLORMAP_VIRIDIS, cv2.COLORMAP_CIVIDIS,
-        cv2.COLORMAP_TWILIGHT, cv2.COLORMAP_TWILIGHT_SHIFTED,
-        cv2.COLORMAP_TURBO, cv2.COLORMAP_DEEPGREEN,
-    ]
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    return cv2.applyColorMap(gray, random.choice(COLORMAPS))
+    edges = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
+    return edges
 
 # ============================================================
-# MAPPING
+# APPLY FILTER STACK (optimized: single pass, blend by flux)
 # ============================================================
-def laplacian_count_from_flux(n):
-    if n < 10: return 1
-    if n < 15: return 2
-    if n < 20: return 3
-    if n < 25: return 4
-    return 5
+def apply_filter_stack(frame, filters, mode_name):
+    """
+    mode_name:
+      - 'laplacian'      -> edge detect + blend
+      - 'morph_gradient' -> morph gradient + blend
+      - 'sobel'          -> sobel + blend (if used)
+      - 'colormap'       -> colormap based on flux
+    """
+    # COLORMAP MODE (still only one grayscale conversion)
+    if mode_name == "colormap":
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-def apply_filter_by_name(frame, name):
-    return {
-        "sobel": apply_sobel,
-        "scharr": apply_scharr,
-        "laplacian": apply_laplacian,
-        "canny": apply_canny,
-        "gaussian": apply_gaussian,
-        "median": apply_median,
-        "bilateral": apply_bilateral,
-        "stylization": apply_stylization,
-        "pencil": apply_pencil,
-        "detail": apply_detail_enhance,
-        "edge_preserve": apply_edge_preserving,
-        "morph_gradient": apply_morph_gradient,
-        "sharpen": apply_sharpen,
-        "colormap": apply_colormap,
-    }.get(name, lambda f: f)(frame)
-
-# ============================================================
-# APPLY FILTER STACK
-# ============================================================
-def apply_filter_stack(frame, filters):
-    global current_mode
-    out = frame
-
-    # Apply base filters (exclude the edge modes + colormap here)
-    base = [
-        f for f in filters
-        if f not in ("laplacian", "sobel", "canny", "morph_gradient", "colormap")
-    ]
-    for f in base:
-        out = apply_filter_by_name(out, f)
-
-    # EDGE MODE: use flux to decide how many passes
-    count = laplacian_count_from_flux(current_flux)
-
-    for _ in range(count):
-        if current_mode == "laplacian":
-            out = apply_laplacian(out)
-        elif current_mode == "sobel":
-            out = apply_sobel(out)
-        elif current_mode == "canny":
-            out = apply_canny(out)
-        elif current_mode == "morph_gradient":
-            out = apply_morph_gradient(out)
+        if current_flux < 100:
+            out = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        elif current_flux < 200:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_COOL)
+        elif current_flux < 300:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+        elif current_flux < 400:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_DEEPGREEN)
+        elif current_flux < 500:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+        elif current_flux < 600:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_COOL)
+        elif current_flux < 700:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+        elif current_flux < 800:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_MAGMA)
+        elif current_flux < 900:
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_MAGMA)
         else:
-            # fallback: do nothing if mode is invalid
-            break
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_TURBO)
 
-    # If you want a colormap always at the end for any mode, uncomment:
-    # out = apply_colormap(out)
+        # light blur once
+        out = cv2.GaussianBlur(out, (3, 3), 3)
+        return out
 
-    return out
+    # EDGE MODES — ONE FILTER PER FRAME
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    if mode_name == "laplacian":
+        edges = apply_laplacian_gray(gray)
+    elif mode_name == "sobel":
+        edges = apply_sobel_gray(gray)
+    elif mode_name == "morph_gradient":
+        edges = apply_morph_gradient_gray(gray)
+    else:
+        # fallback: no processing
+        return frame
+
+    edges_color = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+
+    # Use flux to control how strong edges are (0.2–1.0)
+    alpha = np.clip(current_flux / 400.0, 0.2, 1.0)
+    beta = 1.0 - alpha
+
+    blended = cv2.addWeighted(frame, beta, edges_color, alpha, 0)
+    return blended
 
 # ============================================================
 # VIDEO LOOP
@@ -246,23 +267,34 @@ if not cap.isOpened():
 cv2.namedWindow("Video Filters", cv2.WINDOW_NORMAL)
 cv2.setWindowProperty("Video Filters", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+# ---- FPS HANDLING ----
+fps_raw = cap.get(cv2.CAP_PROP_FPS)
+print(f"[VIDEO] Raw FPS from OpenCV: {fps_raw}")
+
+if fps_raw <= 0 or fps_raw > 60:
+    fps = 30.0
+else:
+    fps = fps_raw
+
+print(f"[VIDEO] Using FPS: {fps}")
 frame_time = 1.0 / fps
+# -----------------------
+
 last_time = time.time()
-frozen_frame = None
 
 print("\n=== VIDEO FILTER ENGINE RUNNING ===")
 print("Press Q to quit.")
-print("Press 1 → Laplacian mode")
-print("Press 2 → Sobel mode")
-print("Press 3 → Canny mode")
-print("Press 4 → Morph gradient mode\n")
+print("1 = Laplacian mode (manual override)")
+print("2 = Morph gradient mode (manual override)")
+print("3 = Colormap mode (manual override)")
+print("OSC /butcher/mode (1/2/3) also switches mode.\n")
 
 while not stop_flag:
     now = time.time()
 
     if current_speed > 0:
-        if now - last_time >= frame_time / current_speed:
+        # Only advance frames based on fps and current_speed
+        if now - last_time >= frame_time / max(current_speed, 0.0001):
             last_time = now
 
             ret, frame = cap.read()
@@ -270,36 +302,34 @@ while not stop_flag:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            filtered = apply_filter_stack(frame, active_filters)
-            frozen_frame = filtered
+            # -------- performance tweak: downscale big frames --------
+            h, w = frame.shape[:2]
+            MAX_DIM = 720  # tweak this: 480 is faster, 720 nicer
+
+            if max(h, w) > MAX_DIM:
+                scale = MAX_DIM / max(h, w)
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                frame_proc = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            else:
+                frame_proc = frame
+            # ---------------------------------------------------------
+
+            filtered = apply_filter_stack(frame_proc, active_filters, mode)
             cv2.imshow("Video Filters", filtered)
 
-    else:
-        if frozen_frame is not None:
-            cv2.imshow("Video Filters", frozen_frame)
-
     key = cv2.waitKey(1) & 0xFF
-
     if key == ord('q'):
         stop_flag = True
-        break
-
-    # mode switching
     elif key == ord('1'):
-        current_mode = "laplacian"
-        print("[MODE] Laplacian")
-
+        mode = "laplacian"
+        print("Mode: Laplacian (manual)")
     elif key == ord('2'):
-        current_mode = "sobel"
-        print("[MODE] Sobel")
-
+        mode = "morph_gradient"
+        print("Mode: Morph Gradient (manual)")
     elif key == ord('3'):
-        current_mode = "canny"
-        print("[MODE] Canny")
-
-    elif key == ord('4'):
-        current_mode = "morph_gradient"
-        print("[MODE] Morph gradient")
+        mode = "colormap"
+        print("Mode: Colormap (manual)")
 
 # ============================================================
 # CLEAN EXIT

@@ -13,7 +13,7 @@ from pythonosc.osc_server import BlockingOSCUDPServer
 # ============================================================
 DEBUG = False          # set True if you want verbose prints
 MAX_DIM = 720          # working resolution (try 240 if still laggy, 480 if you want prettier)
-MAX_SPEED = 2.0        # cap playback speed multiplier (was 2.0 before)
+MAX_SPEED = 1.5        # cap playback speed multiplier (was 2.0 before)
 
 # ============================================================
 # GLOBAL STATE
@@ -230,7 +230,6 @@ def morph_gradient_gray(gray):
 # ============================================================
 def count_from_flux(n, mode_name):
     if mode_name == "laplacian":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
@@ -239,7 +238,6 @@ def count_from_flux(n, mode_name):
         return 5
 
     if mode_name == "morph_gradient":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
@@ -247,7 +245,6 @@ def count_from_flux(n, mode_name):
         return 13
 
     if mode_name == "sobel":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 300: return 3
         if n < 600: return 6
@@ -264,8 +261,7 @@ def apply_filter_stack(frame, filters, mode_name):
     # === COLORMAP MODE (unchanged logic) ===
     if mode_name == "colormap":
         gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        if current_flux < 50: 
-            out = gray
+
         if current_flux < 100:
             out = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         elif current_flux < 200:

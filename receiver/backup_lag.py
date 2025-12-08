@@ -2,18 +2,15 @@ import cv2
 import numpy as np
 import threading
 import time
+import random
 import os
-import re
+import subprocess
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import BlockingOSCUDPServer
+import re
 
-# ============================================================
-# CONFIG (TUNED FOR OLD LAPTOP)
-# ============================================================
-DEBUG = False          # set True if you want verbose prints
-MAX_DIM = 720          # working resolution (try 240 if still laggy, 480 if you want prettier)
-MAX_SPEED = 2.0        # cap playback speed multiplier (was 2.0 before)
+
 
 # ============================================================
 # GLOBAL STATE
@@ -23,15 +20,11 @@ current_speed = 1.0
 current_flux = 0   # expected 0..1000 from flux script
 stop_flag = False
 
-screen_w, screen_h = None, None  # unused now but kept for compatibility
+screen_w, screen_h = None, None  # set later
 
 # current visual mode (laplacian, morph_gradient, colormap)
 mode = "laplacian"   # default
 
-# throttle printing so it doesn't lag
-_last_bpm_print = 0.0
-_last_flux_print = 0.0
-_last_mode_print = 0.0
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MEDIA_DIR = os.path.join(BASE_DIR, "..", "media")
@@ -42,10 +35,10 @@ video_path = None
 
 try:
     files = os.listdir(MEDIA_DIR)
-    if DEBUG:
-        print(f"[PATH] Found files: {files}")
+    print(f"[PATH] Found files: {files}")
 except Exception as e:
     print(f"[ERROR] Cannot read media directory: {e}")
+    # stop_osc() would be undefined here, so just exit
     exit()
 
 # Regex patterns:
@@ -65,23 +58,20 @@ for fname in sorted(files):  # sorted → stable order
 
 if video_path is None:
     print("[ERROR] No videos found (expected video<num>.* or video_vertical<num>.*)")
+    # stop_osc() would be undefined here, so just exit
     exit()
 
 print(f"[VIDEO] Loaded: {video_path}")
-
 # ============================================================
 # FILTER STACK
 # ============================================================
 active_filters = []
 
-# Precompute kernel for morph gradient (used a lot at high flux)
-MORPH_KERNEL = np.ones((5, 5), np.uint8)
-
 # ============================================================
 # OSC CALLBACKS
 # ============================================================
 def got_bpm(addr, bpm_value):
-    global current_bpm, current_speed, _last_bpm_print
+    global current_bpm, current_speed
     try:
         bpm_value = float(bpm_value)
     except:
@@ -89,25 +79,18 @@ def got_bpm(addr, bpm_value):
 
     current_bpm = bpm_value
     current_speed = 0.0 if bpm_value <= 0 else 1.0 + 0.09 * (bpm_value - 100)
-    current_speed = max(0.0, min(current_speed, MAX_SPEED))
 
-    now = time.time()
-    if DEBUG and (now - _last_bpm_print > 0.5):
-        print(f"[OSC] BPM = {bpm_value:.2f} → speed = {current_speed:.3f}x")
-        _last_bpm_print = now
+    print(f"[OSC] BPM = {bpm_value:.2f} → speed = {current_speed:.3f}x")
 
 
 def got_flux(addr, flux_value):
-    global current_flux, _last_flux_print
+    global current_flux
     try:
         current_flux = int(flux_value)
     except:
         return
 
-    now = time.time()
-    if DEBUG and (now - _last_flux_print > 0.5):
-        print(f"[OSC] FLUX = {current_flux}")
-        _last_flux_print = now
+    print(f"[OSC] FLUX = {current_flux}")
 
 
 def got_mode(addr, mode_value):
@@ -117,29 +100,25 @@ def got_mode(addr, mode_value):
     2 -> morph_gradient
     3 -> colormap
     """
-    global mode, _last_mode_print
+    global mode
     try:
         m = int(mode_value)
     except:
-        if DEBUG:
-            print(f"[OSC] MODE invalid value: {mode_value}")
+        print(f"[OSC] MODE invalid value: {mode_value}")
         return
 
     if m == 1:
         mode = "laplacian"
     elif m == 2:
-        mode = "morph_gradient"
+        mode = "laplacian"
     elif m == 3:
-        mode = "colormap"
+        mode = "laplacian"
     else:
-        if DEBUG:
-            print(f"[OSC] MODE unknown int: {m}")
+        # ignore unknown modes
+        print(f"[OSC] MODE unknown int: {m}")
         return
 
-    now = time.time()
-    if DEBUG and (now - _last_mode_print > 0.5):
-        print(f"[OSC] MODE = {m} → {mode}")
-        _last_mode_print = now
+    print(f"[OSC] MODE = {m} → {mode}")
 
 
 # ============================================================
@@ -153,7 +132,7 @@ def start_osc():
     dispatcher = Dispatcher()
     dispatcher.map("/bpm", got_bpm)
     dispatcher.map("/butcher/flux", got_flux)
-    dispatcher.map("/butcher/mode", got_mode)   # mode endpoint
+    dispatcher.map("/butcher/mode", got_mode)   # NEW: mode endpoint
 
     osc_server = BlockingOSCUDPServer(("0.0.0.0", 9000), dispatcher)
     print("[OSC] Listening on port 9000...")
@@ -179,7 +158,7 @@ osc_thread = threading.Thread(target=start_osc, daemon=True)
 osc_thread.start()
 
 # ============================================================
-# ORIGINAL BGR FILTER FUNCTIONS (kept if you need them elsewhere)
+# FILTER FUNCTIONS
 # ============================================================
 def apply_sobel(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -202,44 +181,27 @@ def apply_laplacian(frame):
 
 def apply_morph_gradient(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, MORPH_KERNEL)
+    kernel = np.ones((5, 5), np.uint8)
+    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel)
     return cv2.cvtColor(grad, cv2.COLOR_GRAY2BGR)
 
 def apply_gaussian(frame):
     return cv2.GaussianBlur(frame, (3, 3), 3)
 
-# === grayscale-only helpers for fast multi-pass ===
-def laplacian_gray(gray):
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
-    lap = cv2.convertScaleAbs(lap)
-    return lap
-
-def sobel_gray(gray):
-    sx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
-    sy = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
-    mag = cv2.magnitude(sx, sy)
-    mag = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
-    return mag.astype(np.uint8)
-
-def morph_gradient_gray(gray):
-    grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, MORPH_KERNEL)
-    return grad
 
 # ============================================================
-# MAPPING (unchanged)
+# MAPPING
 # ============================================================
 def count_from_flux(n, mode_name):
     if mode_name == "laplacian":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
         if n < 500: return 5
-        if n < 700: return 5
-        return 5
+        if n < 700: return 7
+        return 9
 
     if mode_name == "morph_gradient":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
@@ -247,7 +209,6 @@ def count_from_flux(n, mode_name):
         return 13
 
     if mode_name == "sobel":
-        if n < 50: return 0
         if n < 100: return 1
         if n < 300: return 3
         if n < 600: return 6
@@ -256,16 +217,15 @@ def count_from_flux(n, mode_name):
     return 0
 
 # ============================================================
-# APPLY FILTER STACK (same behavior, optimized implementation)
+# APPLY FILTER STACK
 # ============================================================
 def apply_filter_stack(frame, filters, mode_name):
     out = frame
 
-    # === COLORMAP MODE (unchanged logic) ===
+    # === COLORMAP MODE ===
     if mode_name == "colormap":
         gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        if current_flux < 50: 
-            out = gray
+
         if current_flux < 100:
             out = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         elif current_flux < 200:
@@ -285,26 +245,62 @@ def apply_filter_stack(frame, filters, mode_name):
         elif current_flux < 900:
             out = cv2.applyColorMap(gray, cv2.COLORMAP_MAGMA)
         else:
-            # 400–1000: turbo
+            # 400–1000: hot
             out = cv2.applyColorMap(gray, cv2.COLORMAP_TURBO)
 
         return apply_gaussian(out)
 
     # === EDGE MODES ===
-    # Multi-pass on grayscale, same pass counts as original.
-    gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-    passes = count_from_flux(current_flux, mode_name)
-
-    for _ in range(passes):
+    for _ in range(count_from_flux(current_flux, mode_name)):
         if mode_name == "laplacian":
-            gray = laplacian_gray(gray)
+            out = apply_laplacian(out)
         elif mode_name == "sobel":
-            gray = sobel_gray(gray)
+            out = apply_sobel(out)
         elif mode_name == "morph_gradient":
-            gray = morph_gradient_gray(gray)
+            out = apply_morph_gradient(out)
 
-    out = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
     return out
+
+
+# ============================================================
+# SAFE FULLSCREEN RESIZE
+# ============================================================
+def safe_fullscreen_resize(img):
+    global screen_w, screen_h
+
+    if screen_w is None or screen_h is None:
+        # Try to get real screen size on macOS via AppleScript
+        try:
+            cmd = r"""osascript -e 'tell application "Finder" to get bounds of window of desktop'"""
+            raw = subprocess.check_output(cmd, shell=True).decode().strip()
+            # raw looks like: "{0, 0, 1440, 900}"
+            raw = raw.replace("{", "").replace("}", "")
+            parts = [int(v.strip()) for v in raw.split(",")]
+            left, top, right, bottom = parts
+            screen_w = right - left
+            screen_h = bottom - top
+        except Exception as e:
+            print(f"[Fullscreen] AppleScript failed: {e}")
+            # Fallback to OpenCV window rect
+            try:
+                _, _, w, h = cv2.getWindowImageRect("Video Filters")
+                if w > 0 and h > 0:
+                    screen_w, screen_h = w, h
+                else:
+                    raise ValueError
+            except Exception as e2:
+                print(f"[Fullscreen] OpenCV rect failed: {e2}")
+                # Final fallback: image size
+                screen_h, screen_w = img.shape[:2]
+
+        print(f"[Fullscreen] Using {screen_w}x{screen_h}")
+
+    try:
+        return cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+    except Exception as e:
+        print(f"[Fullscreen] Resize failed: {e}")
+        return img
+
 
 # ============================================================
 # VIDEO LOOP
@@ -318,19 +314,18 @@ if not cap.isOpened():
 cv2.namedWindow("Video Filters", cv2.WINDOW_NORMAL)
 cv2.setWindowProperty("Video Filters", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-# ---- FPS HANDLING (tuned) ----
+# ---- FPS HANDLING (ONLY CHANGE) ----
 fps_raw = cap.get(cv2.CAP_PROP_FPS)
 print(f"[VIDEO] Raw FPS from OpenCV: {fps_raw}")
 
-# old laptops: don't try to hit 60 fps
-if fps_raw <= 0:
-    fps = 24.0
+if fps_raw <= 0 or fps_raw > 60:
+    fps = 30.0
 else:
-    fps = min(fps_raw, 30.0)
+    fps = fps_raw
 
 print(f"[VIDEO] Using FPS: {fps}")
 frame_time = 1.0 / fps
-# -----------------------
+# ------------------------------------
 
 last_time = time.time()
 
@@ -345,7 +340,7 @@ while not stop_flag:
     now = time.time()
 
     if current_speed > 0:
-        if now - last_time >= frame_time / max(current_speed, 0.0001):
+        if now - last_time >= frame_time / current_speed:
             last_time = now
 
             ret, frame = cap.read()
@@ -353,8 +348,11 @@ while not stop_flag:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            # -------- downscale BEFORE filters (big win) --------
+            # -------- performance tweak: downscale big frames --------
             h, w = frame.shape[:2]
+
+            # You can tweak this threshold; 720 is a good starting point
+            MAX_DIM = 720  
 
             if max(h, w) > MAX_DIM:
                 scale = MAX_DIM / max(h, w)
@@ -363,27 +361,24 @@ while not stop_flag:
                 frame_proc = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
             else:
                 frame_proc = frame
-            # ----------------------------------------------------
+            # ---------------------------------------------------------
 
             filtered = apply_filter_stack(frame_proc, active_filters, mode)
-            # Let OpenCV fullscreen scale this, no extra resize
-            cv2.imshow("Video Filters", filtered)
+            stretched = safe_fullscreen_resize(filtered)
+            cv2.imshow("Video Filters", stretched)
 
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         stop_flag = True
     elif key == ord('1'):
         mode = "laplacian"
-        if DEBUG:
-            print("Mode: Laplacian (manual)")
+        print("Mode: Laplacian (manual)")
     elif key == ord('2'):
         mode = "morph_gradient"
-        if DEBUG:
-            print("Mode: Morph Gradient (manual)")
+        print("Mode: Morph Gradient (manual)")
     elif key == ord('3'):
         mode = "colormap"
-        if DEBUG:
-            print("Mode: Colormap (manual)")
+        print("Mode: Colormap (manual)")
 
 # ============================================================
 # CLEAN EXIT
