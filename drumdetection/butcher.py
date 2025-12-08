@@ -448,6 +448,7 @@ class Butcher(App):
                 if self.osc_client:
                     word = random.choice(words)
                     self.osc_client.send_message("/butcher/kick", [word, velocity])
+                    self.osc_client.send_message("/butcher/kick", [word, 0])
                 self.last_detection['kick'] = current_time
         
         if snare_onset and snare_debounced and total_energy > self.min_energy:
@@ -458,6 +459,7 @@ class Butcher(App):
                 if self.osc_client:
                     word = random.choice(words)
                     self.osc_client.send_message("/butcher/snare", [word, velocity])
+                    self.osc_client.send_message("/butcher/snare", [word, 0])
                 self.last_detection['snare'] = current_time
         
         if hihat_onset and hihat_debounced and total_energy > self.min_energy:
@@ -468,6 +470,7 @@ class Butcher(App):
                 if self.osc_client:
                     word = random.choice(words)
                     self.osc_client.send_message("/butcher/hihat", [word, velocity])
+                    self.osc_client.send_message("/butcher/hihat", [word, 0])
                 self.last_detection['hihat'] = current_time
     
     def log_output(self, message: str) -> None:

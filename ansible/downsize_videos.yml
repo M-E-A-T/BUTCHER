@@ -47,40 +47,31 @@
 
   tasks:
 
+    # - name: Ensure ffmpeg is installed
+    #   become: true
+    #   ansible.builtin.apt:
+    #     name: ffmpeg
+    #     state: present
+    #     update_cache: yes
 
-    - name: Kill spython
-      ansible.builtin.command: killall python
-      ignore_errors: yes
 
-
-    - name: Ensure logs directory exists on remote host
-      ansible.builtin.file:
-        path: "{{ project_root }}/logs"
-        state: directory
-        mode: "0755"
-
-    - name: run no sleep or lock scripts
-      ansible.builtin.shell: |
-        ./config/keep_awake.sh
+    - name: Downscale all video* and video_vertical* in media to max 320px
+      ansible.builtin.shell: >
+        cd "{{ project_root }}/media" &&
+        echo "[INFO] In $(pwd)" &&
+        for f in video*.* video_vertical*.*; do
+          if [ -f "$f" ]; then
+            echo "[INFO] Processing $f"
+            tmp="tmp_$f"
+            ffmpeg -y -i "$f" -vf 'scale=320:320:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2' -c:a copy "$tmp"
+            mv "$tmp" "$f"
+          fi
+        done &&
+        echo "[INFO] Done scaling videos in media/"
       args:
-        chdir: "{{ project_root }}"
         executable: /bin/bash
-      environment:
-        DISPLAY: ":0"
-      async: 86400
-      poll: 0
 
-    - name: Start visualReceiver asynchronously (logging to remote .txt, using venv)
-      ansible.builtin.shell: |
-        "{{ venv_dir }}/bin/python" receiver/visualReceiver.py \
-          > logs/visualReceiver_{{ inventory_hostname }}.txt 2>&1
-      args:
-        chdir: "{{ project_root }}"
-        executable: /bin/bash
-      environment:
-        DISPLAY: ":0"
-      async: 86400
-      poll: 0
+
 
     # - name: Run OpenCV motion script on Pi display
     #   become: true
@@ -90,29 +81,3 @@
     #   async: 3600
     #   poll: 0
 
-
-# ============================================================
-# PLAY 2 — FETCH .TXT LOGS TO YOUR ANSIBLE MACHINE
-# ============================================================
-- name: Fetch logs back to the Ansible controller
-  hosts: meatops
-  gather_facts: no
-
-  tasks:
-
-    - name: Ensure local ansible/logs folder exists
-      delegate_to: localhost
-      run_once: true
-      ansible.builtin.file:
-        path: "{{ playbook_dir }}/logs"
-        state: directory
-        mode: "0755"
-
-    - name: Fetch remote .txt logs to controller (into ansible/logs)
-      ansible.builtin.fetch:
-        src: "/home/{{ ansible_user }}/Desktop/BUTCHER/logs/visualReceiver_{{ inventory_hostname }}.txt"
-        dest: "{{ playbook_dir }}/logs/"
-        flat: yes
-
-
-    

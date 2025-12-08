@@ -17,9 +17,12 @@ WINDOW_SIZE_MULTIPLE = 1   # not used for flux, but left for consistency
 
 # OSC CONFIG
 OSC_PORT      = 9000
-OSC_ADDR      = "/flux"
+
+OSC_ADDR      = "/butcher/flux"
+OSC_MODE_ADDR = "/butcher/mode"    # NEW MODE ENDPOINT
+
 OSC_LOCAL_IP  = "127.0.0.1"
-OSC_BCAST_IP  = "7.7.7.255"   # LAN broadcast
+OSC_BCAST_IP  = "7.7.7.255"        # LAN broadcast
 
 osc_local = SimpleUDPClient(OSC_LOCAL_IP, OSC_PORT)
 osc_bcast = SimpleUDPClient(OSC_BCAST_IP, OSC_PORT, allow_broadcast=True)
@@ -201,10 +204,8 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     # DYNAMIC NORMALIZATION: 0..1000
     # ==============================
     if smoothed_flux > 1e-6:
-        if smoothed_flux < flux_min:
-            flux_min = smoothed_flux
-        if smoothed_flux > flux_max:
-            flux_max = smoothed_flux
+        flux_min = min(flux_min, smoothed_flux)
+        flux_max = max(flux_max, smoothed_flux)
 
     if flux_max > flux_min:
         norm = (smoothed_flux - flux_min) / (flux_max - flux_min)
@@ -213,7 +214,6 @@ def readAudioFrames(in_data, frame_count, time_info, status):
 
     norm = np.clip(norm, 0.0, 1.0)
     flux_int = int(norm * 1000)
-    # ==============================
 
     print(f"{flux_int}", flush=True)
 
@@ -222,6 +222,30 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     osc_bcast.send_message(OSC_ADDR, flux_int)
 
     return (in_data, pyaudio.paContinue)
+
+
+# ==============================
+# MODE SENDER (cycle every 30 sec)
+# ==============================
+
+def mode_sender():
+    """
+    Cycle through 1 → 2 → 3 → 1 ... every 30 seconds
+    and send to /butcher/mode on both local + broadcast.
+    """
+    mode_val = 1
+    while not stop_flag:
+        print(f"[MODE] Sending {mode_val} on {OSC_MODE_ADDR}", flush=True)
+        try:
+            osc_local.send_message(OSC_MODE_ADDR, mode_val)
+            osc_bcast.send_message(OSC_MODE_ADDR, mode_val)
+        except Exception as e:
+            print(f"[MODE] Error sending mode: {e}")
+
+        sleep(30.0)
+
+        # cycle to next mode
+        mode_val = (mode_val % 3) + 1
 
 
 # ==============================
@@ -250,7 +274,8 @@ def keyboard_listener():
 def main():
     global selected_device_index, stop_flag
 
-    print("\nReal-time Spectral Flux → OSC (/flux)")
+    print("\nReal-time Spectral Flux → OSC (/butcher/flux)")
+    print("Mode cycling → OSC (/butcher/mode) every 30 seconds")
     print("Sending OSC:")
     print(f"  → local:     {OSC_LOCAL_IP}:{OSC_PORT}")
     print(f"  → broadcast: {OSC_BCAST_IP}:{OSC_PORT}\n")
@@ -262,6 +287,10 @@ def main():
 
         kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
         kb_thread.start()
+
+        # Start mode cycling thread
+        mode_thread = threading.Thread(target=mode_sender, daemon=True)
+        mode_thread.start()
 
         inputStream = pa.open(
             format=pyaudio.paFloat32,

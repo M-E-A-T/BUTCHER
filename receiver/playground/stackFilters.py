@@ -30,7 +30,7 @@ active_filters = []  # e.g. ["gaussian", "sobel", "colormap"]
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Build the path relative to the script location
-video_path = os.path.join(BASE_DIR, "..", "..", "media", "test.mp4")
+video_path = os.path.join(BASE_DIR, "..", "..", "media", "video_vertical3.mp4")
 
 
 # -----------------------------

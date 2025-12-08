@@ -8,6 +8,9 @@ import subprocess
 
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import BlockingOSCUDPServer
+import re
+
+
 
 # ============================================================
 # GLOBAL STATE
@@ -19,12 +22,46 @@ stop_flag = False
 
 screen_w, screen_h = None, None  # set later
 
-# ============================================================
-# PATHS
-# ============================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-video_path = os.path.join(BASE_DIR, "..", "media", "test.mp4")
+# current visual mode (laplacian, morph_gradient, colormap)
+mode = "laplacian"   # default
 
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MEDIA_DIR = os.path.join(BASE_DIR, "..", "media")
+
+print(f"[PATH] Looking in: {MEDIA_DIR}")
+
+video_path = None
+
+try:
+    files = os.listdir(MEDIA_DIR)
+    print(f"[PATH] Found files: {files}")
+except Exception as e:
+    print(f"[ERROR] Cannot read media directory: {e}")
+    # stop_osc() would be undefined here, so just exit
+    exit()
+
+# Regex patterns:
+#   video1, video2, video10...
+#   video_vertical1, video_vertical12...
+pattern_normal   = re.compile(r"^video\d+\.", re.IGNORECASE)
+pattern_vertical = re.compile(r"^video_vertical\d+\.", re.IGNORECASE)
+
+for fname in sorted(files):  # sorted → stable order
+    lower = fname.lower()
+
+    if pattern_normal.match(lower) or pattern_vertical.match(lower):
+        full = os.path.join(MEDIA_DIR, fname)
+        if os.path.isfile(full):
+            video_path = full
+            break
+
+if video_path is None:
+    print("[ERROR] No videos found (expected video<num>.* or video_vertical<num>.*)")
+    # stop_osc() would be undefined here, so just exit
+    exit()
+
+print(f"[VIDEO] Loaded: {video_path}")
 # ============================================================
 # FILTER STACK
 # ============================================================
@@ -56,6 +93,34 @@ def got_flux(addr, flux_value):
     print(f"[OSC] FLUX = {current_flux}")
 
 
+def got_mode(addr, mode_value):
+    """
+    /butcher/mode callback
+    1 -> laplacian
+    2 -> morph_gradient
+    3 -> colormap
+    """
+    global mode
+    try:
+        m = int(mode_value)
+    except:
+        print(f"[OSC] MODE invalid value: {mode_value}")
+        return
+
+    if m == 1:
+        mode = "laplacian"
+    elif m == 2:
+        mode = "laplacian"
+    elif m == 3:
+        mode = "laplacian"
+    else:
+        # ignore unknown modes
+        print(f"[OSC] MODE unknown int: {m}")
+        return
+
+    print(f"[OSC] MODE = {m} → {mode}")
+
+
 # ============================================================
 # START OSC SERVER
 # ============================================================
@@ -66,7 +131,8 @@ def start_osc():
 
     dispatcher = Dispatcher()
     dispatcher.map("/bpm", got_bpm)
-    dispatcher.map("/flux", got_flux)
+    dispatcher.map("/butcher/flux", got_flux)
+    dispatcher.map("/butcher/mode", got_mode)   # NEW: mode endpoint
 
     osc_server = BlockingOSCUDPServer(("0.0.0.0", 9000), dispatcher)
     print("[OSC] Listening on port 9000...")
@@ -122,18 +188,12 @@ def apply_morph_gradient(frame):
 def apply_gaussian(frame):
     return cv2.GaussianBlur(frame, (3, 3), 3)
 
-# def apply_colormap(frame):
-#     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-#     return cv2.applyColorMap(gray, random.choice([
-#         cv2.COLORMAP_HOT, cv2.COLORMAP_JET, cv2.COLORMAP_COOL,
-#         cv2.COLORMAP_MAGMA, cv2.COLORMAP_RAINBOW, cv2.COLORMAP_TURBO
-#     ]))
 
 # ============================================================
 # MAPPING
 # ============================================================
-def count_from_flux(n, mode):
-    if mode == "laplacian":
+def count_from_flux(n, mode_name):
+    if mode_name == "laplacian":
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
@@ -141,14 +201,14 @@ def count_from_flux(n, mode):
         if n < 700: return 7
         return 9
 
-    if mode == "morph_gradient":
+    if mode_name == "morph_gradient":
         if n < 100: return 1
         if n < 200: return 2
         if n < 300: return 3
         if n < 500: return 7
         return 13
 
-    if mode == "sobel":
+    if mode_name == "sobel":
         if n < 100: return 1
         if n < 300: return 3
         if n < 600: return 6
@@ -159,11 +219,11 @@ def count_from_flux(n, mode):
 # ============================================================
 # APPLY FILTER STACK
 # ============================================================
-def apply_filter_stack(frame, filters, mode):
+def apply_filter_stack(frame, filters, mode_name):
     out = frame
 
     # === COLORMAP MODE ===
-    if mode == "colormap":
+    if mode_name == "colormap":
         gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
 
         if current_flux < 100:
@@ -177,7 +237,7 @@ def apply_filter_stack(frame, filters, mode):
         elif current_flux < 500:
             out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
         elif current_flux < 600:
-            out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
+            out = cv2.applyColorMap(gray, cv2.COLORMAP_COOL)
         elif current_flux < 700:
             out = cv2.applyColorMap(gray, cv2.COLORMAP_HOT)
         elif current_flux < 800:
@@ -191,12 +251,12 @@ def apply_filter_stack(frame, filters, mode):
         return apply_gaussian(out)
 
     # === EDGE MODES ===
-    for _ in range(count_from_flux(current_flux, mode)):
-        if mode == "laplacian":
+    for _ in range(count_from_flux(current_flux, mode_name)):
+        if mode_name == "laplacian":
             out = apply_laplacian(out)
-        elif mode == "sobel":
+        elif mode_name == "sobel":
             out = apply_sobel(out)
-        elif mode == "morph_gradient":
+        elif mode_name == "morph_gradient":
             out = apply_morph_gradient(out)
 
     return out
@@ -209,31 +269,38 @@ def safe_fullscreen_resize(img):
     global screen_w, screen_h
 
     if screen_w is None or screen_h is None:
-        # Try OpenCV
+        # Try to get real screen size on macOS via AppleScript
         try:
-            _, _, w, h = cv2.getWindowImageRect("Video Filters")
-            if w > 0 and h > 0:
-                screen_w, screen_h = w, h
-            else:
-                raise ValueError
-        except:
-            # macOS fallback using AppleScript
+            cmd = r"""osascript -e 'tell application "Finder" to get bounds of window of desktop'"""
+            raw = subprocess.check_output(cmd, shell=True).decode().strip()
+            # raw looks like: "{0, 0, 1440, 900}"
+            raw = raw.replace("{", "").replace("}", "")
+            parts = [int(v.strip()) for v in raw.split(",")]
+            left, top, right, bottom = parts
+            screen_w = right - left
+            screen_h = bottom - top
+        except Exception as e:
+            print(f"[Fullscreen] AppleScript failed: {e}")
+            # Fallback to OpenCV window rect
             try:
-                cmd = """osascript -e 'tell application "Finder" to get bounds of window of desktop'"""
-                out = subprocess.check_output(cmd, shell=True).decode().strip().split(",")
-                screen_w = int(out[2]) - int(out[0])
-                screen_h = int(out[3]) - int(out[1])
-            except:
-                # fallback to image size
+                _, _, w, h = cv2.getWindowImageRect("Video Filters")
+                if w > 0 and h > 0:
+                    screen_w, screen_h = w, h
+                else:
+                    raise ValueError
+            except Exception as e2:
+                print(f"[Fullscreen] OpenCV rect failed: {e2}")
+                # Final fallback: image size
                 screen_h, screen_w = img.shape[:2]
 
         print(f"[Fullscreen] Using {screen_w}x{screen_h}")
 
-    # final safe resize
     try:
-        return cv2.resize(img, (screen_w, screen_h), interpolation=cv2.INTER_LINEAR)
-    except:
-        return img  # fallback (never crashes)
+        return cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_LINEAR)
+    except Exception as e:
+        print(f"[Fullscreen] Resize failed: {e}")
+        return img
+
 
 # ============================================================
 # VIDEO LOOP
@@ -247,17 +314,27 @@ if not cap.isOpened():
 cv2.namedWindow("Video Filters", cv2.WINDOW_NORMAL)
 cv2.setWindowProperty("Video Filters", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-frame_time = 1.0 / fps
-last_time = time.time()
+# ---- FPS HANDLING (ONLY CHANGE) ----
+fps_raw = cap.get(cv2.CAP_PROP_FPS)
+print(f"[VIDEO] Raw FPS from OpenCV: {fps_raw}")
 
-mode = "laplacian"
+if fps_raw <= 0 or fps_raw > 60:
+    fps = 30.0
+else:
+    fps = fps_raw
+
+print(f"[VIDEO] Using FPS: {fps}")
+frame_time = 1.0 / fps
+# ------------------------------------
+
+last_time = time.time()
 
 print("\n=== VIDEO FILTER ENGINE RUNNING ===")
 print("Press Q to quit.")
-print("1 = Laplacian mode")
-print("2 = Morph gradient mode")
-print("3 = Colormap mode\n")
+print("1 = Laplacian mode (manual override)")
+print("2 = Morph gradient mode (manual override)")
+print("3 = Colormap mode (manual override)")
+print("OSC /butcher/mode (1/2/3) also switches mode.\n")
 
 while not stop_flag:
     now = time.time()
@@ -271,7 +348,22 @@ while not stop_flag:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
 
-            filtered = apply_filter_stack(frame, active_filters, mode)
+            # -------- performance tweak: downscale big frames --------
+            h, w = frame.shape[:2]
+
+            # You can tweak this threshold; 720 is a good starting point
+            MAX_DIM = 720  
+
+            if max(h, w) > MAX_DIM:
+                scale = MAX_DIM / max(h, w)
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                frame_proc = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            else:
+                frame_proc = frame
+            # ---------------------------------------------------------
+
+            filtered = apply_filter_stack(frame_proc, active_filters, mode)
             stretched = safe_fullscreen_resize(filtered)
             cv2.imshow("Video Filters", stretched)
 
@@ -280,13 +372,13 @@ while not stop_flag:
         stop_flag = True
     elif key == ord('1'):
         mode = "laplacian"
-        print("Mode: Laplacian")
+        print("Mode: Laplacian (manual)")
     elif key == ord('2'):
         mode = "morph_gradient"
-        print("Mode: Morph Gradient")
+        print("Mode: Morph Gradient (manual)")
     elif key == ord('3'):
         mode = "colormap"
-        print("Mode: Colormap")
+        print("Mode: Colormap (manual)")
 
 # ============================================================
 # CLEAN EXIT
