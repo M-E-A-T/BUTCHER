@@ -1,0 +1,17 @@
+---
+- name: Shutdown meatops and trashcan
+  hosts:
+    - meatops
+    - trashcan
+  gather_facts: no
+  become: true  # run as root
+
+  tasks:
+    - name: Schedule immediate shutdown
+      ansible.builtin.shell: |
+        /sbin/shutdown -h now "Ansible requested shutdown"
+      args:
+        executable: /bin/bash
+      async: 1
+      poll: 0
+      ignore_errors: true

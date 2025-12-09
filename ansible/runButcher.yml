@@ -1,4 +1,35 @@
 ---
+- name: stop sleep!
+  hosts: 
+    - meatops
+    - trashcan
+  gather_facts: no
+
+  vars:
+    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+    venv_dir: "{{ project_root }}/.venv"
+
+  tasks:
+    - name: Mask systemd sleep targets (as root)
+      become: true
+      ansible.builtin.shell: |
+        systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+      args:
+        executable: /bin/bash
+
+    - name: Configure Cinnamon power settings via gsettings (as GUI user)
+      become: false
+      ansible.builtin.shell: |
+        gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+        gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing'
+        gsettings set org.cinnamon.desktop.session idle-delay 0
+        gsettings set org.cinnamon.desktop.screensaver lock-enabled false
+      args:
+        executable: /bin/bash
+      environment:
+        DISPLAY: ":0"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus"   # adjust UID if needed
+
 # ============================================================
 # PLAY 0 — RUN flux.py ON LOCALHOST ONLY
 # ============================================================
@@ -37,6 +68,51 @@
 # ============================================================
 # PLAY 1 — RUN visualReceiver.py ON REMOTE HOSTS (ASYNC) USING VENV
 # ============================================================
+#DEPLOY SURVEIL NOW COMMENT BACK IN 
+# - name: Start visualReceiver on remote hosts
+#   hosts: trashcan
+#   gather_facts: no
+
+#   vars:
+#     project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
+#     venv_dir: "{{ project_root }}/.venv"
+
+#   tasks:
+
+#     - name: Kill spython
+#       ansible.builtin.command: killall python
+#       ignore_errors: yes
+
+
+#     - name: Ensure logs directory exists on remote host
+#       ansible.builtin.file:
+#         path: "{{ project_root }}/logs"
+#         state: directory
+#         mode: "0755"
+
+#     - name: run no sleep or lock scripts
+#       ansible.builtin.shell: |
+#         ./config/keep_awake.sh
+#       args:
+#         chdir: "{{ project_root }}"
+#         executable: /bin/bash
+#       environment:
+#         DISPLAY: ":0"
+#       async: 86400
+#       poll: 0
+
+#     - name: Start visualReceiver asynchronously (logging to remote .txt, using venv)
+#       ansible.builtin.shell: |
+#         "{{ venv_dir }}/bin/python" tower/opencv/cctv2.py \
+#           > logs/cctv_{{ inventory_hostname }}.txt 2>&1
+#       args:
+#         chdir: "{{ project_root }}"
+#         executable: /bin/bash
+#       environment:
+#         DISPLAY: ":0"
+#       async: 86400
+#       poll: 0
+
 - name: Start visualReceiver on remote hosts
   hosts: meatops
   gather_facts: no
@@ -46,7 +122,6 @@
     venv_dir: "{{ project_root }}/.venv"
 
   tasks:
-
 
     - name: Kill spython
       ansible.builtin.command: killall python
@@ -72,7 +147,7 @@
 
     - name: Start visualReceiver asynchronously (logging to remote .txt, using venv)
       ansible.builtin.shell: |
-        "{{ venv_dir }}/bin/python" receiver/visualReceiver.py \
+        "{{ venv_dir }}/bin/python" receiver/visuals.py \
           > logs/visualReceiver_{{ inventory_hostname }}.txt 2>&1
       args:
         chdir: "{{ project_root }}"
@@ -82,70 +157,6 @@
       async: 86400
       poll: 0
 
-- name: start surveil
-  hosts: trashcan
-  gather_facts: no
-
-  vars:
-    project_root: "/home/{{ ansible_user }}/Desktop/BUTCHER"
-    venv_dir: "{{ project_root }}/.venv"
-
-  tasks:
-
-
-    - name: Kill spython
-      ansible.builtin.command: killall python
-      ignore_errors: yes
-
-
-    - name: Ensure logs directory exists on remote host
-      ansible.builtin.file:
-        path: "{{ project_root }}/logs"
-        state: directory
-        mode: "0755"
-
-    - name: run no sleep or lock scripts
-      ansible.builtin.shell: |
-        ./config/keep_awake.sh
-      args:
-        chdir: "{{ project_root }}"
-        executable: /bin/bash
-      environment:
-        DISPLAY: ":0"
-      async: 86400
-      poll: 0
-
-    - name: Start cctv1 asynchronously (logging to remote .txt, using venv)
-      ansible.builtin.shell: |
-        "{{ venv_dir }}/bin/python" tower/opencv/cctv1.py \
-          > logs/surveil_cctv1{{ inventory_hostname }}.txt 2>&1
-      args:
-        chdir: "{{ project_root }}"
-        executable: /bin/bash
-      environment:
-        DISPLAY: ":0"
-      async: 86400
-      poll: 0
-
-    - name: Start cctv2 asynchronously (logging to remote .txt, using venv)
-      ansible.builtin.shell: |
-        "{{ venv_dir }}/bin/python" tower/opencv/cctv2.py \
-          > logs/surveil_cctv1{{ inventory_hostname }}.txt 2>&1
-      args:
-        chdir: "{{ project_root }}"
-        executable: /bin/bash
-      environment:
-        DISPLAY: ":0"
-      async: 86400
-      poll: 0
-
-    # - name: Run OpenCV motion script on Pi display
-    #   become: true
-    #   become_user: student
-      
-    #   ansible.builtin.command: python3 {{ python_path }} 
-    #   async: 3600
-    #   poll: 0
 
 
 # ============================================================
@@ -171,25 +182,7 @@
         dest: "{{ playbook_dir }}/logs/"
         flat: yes
 
-- name: Fetch logs back to the Ansible controller
-  hosts: trashcan
-  gather_facts: no
 
-  tasks:
-
-    - name: Ensure local ansible/logs folder exists
-      delegate_to: localhost
-      run_once: true
-      ansible.builtin.file:
-        path: "{{ playbook_dir }}/logs"
-        state: directory
-        mode: "0755"
-
-    - name: Fetch remote .txt logs to controller (into ansible/logs)
-      ansible.builtin.fetch:
-        src: "/home/{{ ansible_user }}/Desktop/BUTCHER/logs/visualReceiver_{{ inventory_hostname }}.txt"
-        dest: "{{ playbook_dir }}/logs/"
-        flat: yes
 
 
     

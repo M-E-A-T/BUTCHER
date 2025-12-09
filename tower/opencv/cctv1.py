@@ -1,7 +1,5 @@
 import cv2
 import mediapipe as mp
-import math
-import random
 import numpy as np
 from datetime import datetime
 import threading
@@ -220,14 +218,11 @@ def apply_filter_stack(frame, filters, mode_name):
 SCREEN_W = 2560
 SCREEN_H = 1440
 
-# Offsets for each monitor (top-left x,y for each screen)
-# 🔧 CHANGE THESE to match your real X11 layout
 MONITOR_OFFSETS = [
-    (0, 0),                # Monitor 1
-    (5120, 0),             # Monitor 3
+    (0, 0),        # Monitor 1
 ]
 
-WINDOW_NAMES = ["BUTCHER1", "BUTCHER2", "BUTCHER3", "BUTCHER4"]
+WINDOW_NAMES = ["BUTCHER1"]
 
 for name, (ox, oy) in zip(WINDOW_NAMES, MONITOR_OFFSETS):
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -248,18 +243,11 @@ face_detection = mp_face_detection.FaceDetection(
     min_detection_confidence=0.3
 )
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(2)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-tracked_faces = []
 frame_counter = 0
-CENTER_DISTANCE_THRESHOLD = 50
-MAX_MISSING_FRAMES = 10
-
-scanline_overlay = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
-for y in range(0, screen_h, 20):
-    cv2.line(scanline_overlay, (0, y), (screen_w, y), (200, 200, 200), 1)
 
 logo_path = "../media_safe/logo_clear.png"
 logo = cv2.imread(logo_path, cv2.IMREAD_UNCHANGED)
@@ -282,63 +270,6 @@ else:
         logo_rgb = logo
     logo_w = target_w
     logo_h = target_h
-
-def get_unique_color(used_colors):
-    while True:
-        new_color = (
-            random.randint(0, 255),
-            random.randint(0, 255),
-            random.randint(0, 255)
-        )
-        if new_color not in used_colors:
-            return new_color
-
-def remove_gray_bar(frame, max_check_rows=30, std_threshold=10):
-    gray_bar_height = 0
-    h = frame.shape[0]
-    for i in range(min(max_check_rows, h)):
-        row = frame[i, :, :]
-        if np.std(row) < std_threshold:
-            gray_bar_height += 1
-        else:
-            break
-    if gray_bar_height > 0:
-        return frame[gray_bar_height:, :], gray_bar_height
-    return frame, 0
-
-def add_cctv_overlay(frame, frame_counter):
-    overlay = frame.copy()
-    height, width = frame.shape[:2]
-
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cv2.putText(overlay, timestamp, (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                (255, 255, 255), 2, cv2.LINE_AA)
-
-    if (frame_counter // 15) % 2 == 0:
-        cv2.putText(overlay, "REC", (width - 100, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8,
-                    (0, 0, 255), 2, cv2.LINE_AA)
-        cv2.circle(overlay, (width - 30, 30), 8, (0, 0, 255), -1)
-
-    border_thickness = 10
-    cv2.rectangle(overlay,
-                  (border_thickness, border_thickness),
-                  (width - border_thickness, height - border_thickness),
-                  (255, 255, 255), 2)
-
-    if scanline_overlay.shape[1] != width or scanline_overlay.shape[0] != height:
-        lines = cv2.resize(scanline_overlay, (width, height),
-                           interpolation=cv2.INTER_NEAREST)
-    else:
-        lines = scanline_overlay
-
-    overlay = cv2.addWeighted(overlay, 1.0, lines, 0.3, 0)
-
-    noise = np.random.randint(0, 50, frame.shape, dtype=np.uint8)
-    overlay = cv2.addWeighted(overlay, 0.98, noise, 0.02, 0)
-
-    return overlay
 
 def add_logo_overlay(frame):
     if logo_rgb is None:
@@ -369,16 +300,17 @@ while True:
         break
 
     frame_counter += 1
+
+    # Mirror
     frame = cv2.flip(frame, 1)
-    frame, removed_height = remove_gray_bar(frame, max_check_rows=30, std_threshold=10)
 
     orig_h, orig_w = frame.shape[:2]
 
+    # Face detection
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_detection.process(rgb_frame)
 
-    black_background = np.zeros((frame.shape[0], frame.shape[1], 3), dtype=np.uint8)
-
+    # Pixelation over detected faces
     if results.detections:
         for detection in results.detections:
             bbox = detection.location_data.relative_bounding_box
@@ -392,53 +324,18 @@ while True:
             x_max = min(orig_w, x_min + box_w)
             y_max = min(orig_h, y_min + box_h)
 
-            cx = x_min + box_w // 2
-            cy = y_min + box_h // 2
-
-            assigned_color = None
-            for tracked in tracked_faces:
-                prev_cx, prev_cy = tracked['center']
-                if math.hypot(cx - prev_cx, cy - prev_cy) < CENTER_DISTANCE_THRESHOLD:
-                    assigned_color = tracked['color']
-                    tracked['center'] = (cx, cy)
-                    tracked['last_seen'] = frame_counter
-                    break
-
-            if assigned_color is None:
-                used_colors = {f['color'] for f in tracked_faces}
-                assigned_color = get_unique_color(used_colors)
-                tracked_faces.append({
-                    'center': (cx, cy),
-                    'color': assigned_color,
-                    'last_seen': frame_counter
-                })
-
-            cv2.rectangle(black_background, (x_min, y_min), (x_max, y_max),
-                          assigned_color, -1)
-            cv2.rectangle(black_background, (x_min + 20, y_min + 20),
-                          (x_max + 20, y_max + 20), assigned_color, 5)
-
             face_roi = frame[y_min:y_max, x_min:x_max]
             if face_roi.size != 0:
                 small = cv2.resize(face_roi, (12, 12),
                                    interpolation=cv2.INTER_LINEAR)
-                pixelated = cv2.resize(small, (x_max - x_min, y_max - y_min),
-                                       interpolation=cv2.INTER_NEAREST)
+                pixelated = cv2.resize(
+                    small,
+                    (x_max - x_min, y_max - y_min),
+                    interpolation=cv2.INTER_NEAREST
+                )
                 frame[y_min:y_max, x_min:x_max] = pixelated
 
-            confidence = detection.score[0] if detection.score else 0
-            confidence_text = f"Face: {confidence * 100:.1f}%"
-            text_x = x_min
-            text_y = y_min - 10 if (y_min - 10) > 0 else y_min + 20
-            cv2.putText(black_background, confidence_text, (text_x, text_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                        assigned_color, 2, cv2.LINE_AA)
-
-    tracked_faces = [
-        f for f in tracked_faces
-        if (frame_counter - f['last_seen']) <= MAX_MISSING_FRAMES
-    ]
-
+    # Scale to screen
     if screen_w > 0 and screen_h > 0:
         frame_aspect = orig_w / orig_h
         screen_aspect = screen_w / screen_h
@@ -460,20 +357,11 @@ while True:
     else:
         display_frame = frame
 
-    face_overlay = cv2.resize(black_background, (screen_w, screen_h),
-                              interpolation=cv2.INTER_NEAREST)
+    # Apply filter modes to the pixelated frame
+    filtered_frame = apply_filter_stack(display_frame, active_filters, mode)
+    finalFrame = add_logo_overlay(filtered_frame)
 
-    gray_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
-    gray_frame_colored = cv2.cvtColor(gray_frame, cv2.COLOR_GRAY2BGR)
-
-    combined_frame = cv2.addWeighted(gray_frame_colored, 1.0,
-                                     face_overlay, 0.5, 0)
-
-    filtered_frame = apply_filter_stack(combined_frame, active_filters, mode)
-    frame_with_overlay = add_cctv_overlay(filtered_frame, frame_counter)
-    finalFrame = add_logo_overlay(frame_with_overlay)
-
-    # 💥 SHOW SAME FRAME ON ALL FOUR MONITORS
+    # Show on configured windows
     for name in WINDOW_NAMES:
         cv2.imshow(name, finalFrame)
 
@@ -490,3 +378,5 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 stop_osc()
+time.sleep(0.2)
+print("Exited cleanly.")

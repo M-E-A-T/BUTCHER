@@ -1,3 +1,4 @@
+
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -116,7 +117,7 @@ osc_thread = threading.Thread(target=start_osc, daemon=True)
 osc_thread.start()
 
 # ============================================================
-# FILTER IMPLEMENTATION (MODE STUFF)
+# FILTER IMPLEMENTATION (UNCHANGED)
 # ============================================================
 def apply_gaussian(frame):
     return cv2.GaussianBlur(frame, (3, 3), 3)
@@ -212,24 +213,16 @@ def apply_filter_stack(frame, filters, mode_name):
     return out
 
 # -------------------------------------------------
-# MONITOR / WINDOW SETUP
+# MONITOR / WINDOW SETUP (SINGLE WINDOW, SIMPLE)
 # -------------------------------------------------
 SCREEN_W = 2560
 SCREEN_H = 1440
 
-# Assuming 4 monitors in a horizontal row:
-# 1: (0, 0)
-# 2: (2560, 0)
-# 3: (5120, 0)
-# 4: (7680, 0)
 MONITOR_OFFSETS = [
-    (0, 0),        # BUTCHER1 -> Monitor 1
-    (2560, 0),     # BUTCHER2 -> Monitor 2
-    (5120, 0),     # BUTCHER3 -> Monitor 3
-    (7680, 0),     # BUTCHER4 -> Monitor 4
+    (0, 0),   # main monitor; change if needed
 ]
 
-WINDOW_NAMES = ["BUTCHER1", "BUTCHER2", "BUTCHER3", "BUTCHER4"]
+WINDOW_NAMES = ["BUTCHER1"]
 
 for name, (ox, oy) in zip(WINDOW_NAMES, MONITOR_OFFSETS):
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)
@@ -250,31 +243,33 @@ face_detection = mp_face_detection.FaceDetection(
     min_detection_confidence=0.3
 )
 
-# -------------------------------------------------
-# CAMERA SETUP (cam0 -> monitors 1&2, cam1 -> 3&4)
-# -------------------------------------------------
-cap0 = cv2.VideoCapture(0)
-cap1 = cv2.VideoCapture(2)
+# 👇 change index here if you want another camera
+cap = cv2.VideoCapture(2)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-for cap in [cap0, cap1]:
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
+# No tracking, no colors, just blur boxes
 frame_counter = 0
 
 # -------------------------------------------------
-# HELPERS: FACE PIXELATION + SCALING
+# MAIN LOOP
 # -------------------------------------------------
-def pixelate_faces(frame):
-    if frame is None:
-        return None
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
 
-    frame_flipped = cv2.flip(frame, 1)
-    orig_h, orig_w = frame_flipped.shape[:2]
+    frame_counter += 1
+    frame = cv2.flip(frame, 1)
 
-    rgb_frame = cv2.cvtColor(frame_flipped, cv2.COLOR_BGR2RGB)
+    orig_h, orig_w = frame.shape[:2]
+
+    # Face detection
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = face_detection.process(rgb_frame)
 
+    # Blur faces only
     if results.detections:
         for detection in results.detections:
             bbox = detection.location_data.relative_bounding_box
@@ -288,73 +283,43 @@ def pixelate_faces(frame):
             x_max = min(orig_w, x_min + box_w)
             y_max = min(orig_h, y_min + box_h)
 
-            face_roi = frame_flipped[y_min:y_max, x_min:x_max]
+            face_roi = frame[y_min:y_max, x_min:x_max]
             if face_roi.size != 0:
-                small = cv2.resize(face_roi, (12, 12), interpolation=cv2.INTER_LINEAR)
-                pixelated = cv2.resize(
-                    small,
-                    (x_max - x_min, y_max - y_min),
-                    interpolation=cv2.INTER_NEAREST
-                )
-                frame_flipped[y_min:y_max, x_min:x_max] = pixelated
+                # strong blur; adjust kernel if you want more/less blur
+                blurred = cv2.GaussianBlur(face_roi, (51, 51), 30)
+                frame[y_min:y_max, x_min:x_max] = blurred
 
-    return frame_flipped
+    # Scale to screen (keep aspect, center-crop if needed)
+    if screen_w > 0 and screen_h > 0:
+        frame_aspect = orig_w / orig_h
+        screen_aspect = screen_w / screen_h
 
-def scale_to_screen(frame):
-    if frame is None:
-        return None
-
-    orig_h, orig_w = frame.shape[:2]
-    frame_aspect = orig_w / orig_h
-    screen_aspect = screen_w / screen_h
-
-    if frame_aspect > screen_aspect:
-        new_h = screen_h
-        new_w = int(new_h * frame_aspect)
-        resized_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        x_offset = (new_w - screen_w) // 2
-        display_frame = resized_frame[:, x_offset:x_offset+screen_w]
+        if frame_aspect > screen_aspect:
+            new_h = screen_h
+            new_w = int(new_h * frame_aspect)
+            resized_frame = cv2.resize(frame, (new_w, new_h),
+                                       interpolation=cv2.INTER_AREA)
+            x_offset = (new_w - screen_w) // 2
+            display_frame = resized_frame[:, x_offset:x_offset+screen_w]
+        else:
+            new_w = screen_w
+            new_h = int(new_w / frame_aspect)
+            resized_frame = cv2.resize(frame, (new_w, new_h),
+                                       interpolation=cv2.INTER_AREA)
+            y_offset = (new_h - screen_h) // 2
+            display_frame = resized_frame[y_offset:y_offset+screen_h, :]
     else:
-        new_w = screen_w
-        new_h = int(new_w / frame_aspect)
-        resized_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        y_offset = (new_h - screen_h) // 2
-        display_frame = resized_frame[y_offset:y_offset+screen_h, :]
+        display_frame = frame
 
-    return display_frame
+    # Apply mode-based filters
+    filtered_frame = apply_filter_stack(display_frame, active_filters, mode)
 
-# -------------------------------------------------
-# MAIN LOOP (DUAL CAMERA)
-# -------------------------------------------------
-while True:
-    ret0, frame0 = cap0.read()
-    ret1, frame1 = cap1.read()
-
-    if not ret0:
-        print("Failed to grab frame from camera 0")
-    if not ret1:
-        print("Failed to grab frame from camera 1")
-
-    frame_counter += 1
-
-    # Process camera 0
-    if ret0:
-        cam0_face = pixelate_faces(frame0)
-        cam0_scaled = scale_to_screen(cam0_face)
-        cam0_filtered = apply_filter_stack(cam0_scaled, active_filters, mode)
-        cv2.imshow("BUTCHER1", cam0_filtered)
-        cv2.imshow("BUTCHER2", cam0_filtered)
-
-    # Process camera 1
-    if ret1:
-        cam1_face = pixelate_faces(frame1)
-        cam1_scaled = scale_to_screen(cam1_face)
-        cam1_filtered = apply_filter_stack(cam1_scaled, active_filters, mode)
-        cv2.imshow("BUTCHER3", cam1_filtered)
-        cv2.imshow("BUTCHER4", cam1_filtered)
+    # Show same frame on the defined windows
+    for name in WINDOW_NAMES:
+        cv2.imshow(name, filtered_frame)
 
     key = cv2.waitKey(1) & 0xFF
-    if key == 27 or key == ord('q'):   # ESC or 'q'
+    if key == 27 or key == ord('q'):   # ESC or 'q' to quit
         break
     elif key == ord('1'):
         mode = "laplacian"
@@ -363,8 +328,7 @@ while True:
     elif key == ord('3'):
         mode = "colormap"
 
-cap0.release()
-cap1.release()
+cap.release()
 cv2.destroyAllWindows()
 stop_osc()
 time.sleep(0.2)
