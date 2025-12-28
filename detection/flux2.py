@@ -19,6 +19,9 @@ WINDOW_SIZE_MULTIPLE = 1   # not used for flux, but left for consistency
 OSC_PORT      = 9000
 
 OSC_ADDR      = "/butcher/flux"
+OSC_ADDR_LOW  = "/butcher/flux_low"
+OSC_ADDR_MID  = "/butcher/flux_mid"
+OSC_ADDR_HIGH = "/butcher/flux_high"
 OSC_MODE_ADDR = "/butcher/mode"    # MODE ENDPOINT
 
 OSC_LOCAL_IP  = "127.0.0.1"
@@ -33,18 +36,29 @@ audioInputSampleRate  = None
 selected_channel      = None
 num_channels          = None
 
-prev_spectrum  = None
-smoothed_flux  = None
-FLUX_SMOOTH    = 0.2
+prev_spectrum      = None
+smoothed_flux      = None
+FLUX_SMOOTH        = 0.2
+
+
+prev_spectrum_bands = [None, None, None]
+# For new normalization: rolling max for each band
+peak_bands = [1e-6, 1e-6, 1e-6]
+# Faster decay for low/mid bands to better catch transients
+PEAK_DECAY_BANDS = [0.98, 0.98, 0.995]  # [low, mid, high]
+
+# Thresholds for low/mid bands to suppress noise
+LOW_BAND_THRESHOLD = 1e-5
+MID_BAND_THRESHOLD = 1e-5
+
+# === TRANSIENT SENSITIVITY (edit these to adjust per-band sensitivity) ===
+# Lower = more sensitive, Higher = less sensitive
+TRANSIENT_THRESHOLDS = [900, 950, 500]  # [low, mid, high]
 
 stop_flag = False
 
-# dynamic normalization globals
-flux_min = 1e9
-flux_max = 0.0
 
-
-# ==============================
+# ==============================40
 # DEVICE SELECTION
 # ==============================
 
@@ -143,23 +157,16 @@ def select_device(pa):
 # FLUX SYSTEM (RMS-normalized)
 # ==============================
 
-def compute_spectral_flux(signal):
-    global prev_spectrum
-
+def compute_spectral_flux(signal, prev_spectrum):
     # Hanning window
     window = np.hanning(len(signal))
     x = signal * window
-
-    # Normalize by RMS → gain invariant
-    rms = np.sqrt(np.mean(x**2))
-    if rms > 1e-8:
-        x = x / rms
 
     spectrum = np.abs(np.fft.rfft(x))
 
     if prev_spectrum is None:
         prev_spectrum = spectrum
-        return 0.0
+        return 0.0, prev_spectrum
 
     diff = spectrum - prev_spectrum
     diff[diff < 0] = 0
@@ -167,7 +174,23 @@ def compute_spectral_flux(signal):
     flux_value = np.sum(diff)
     prev_spectrum = spectrum
 
-    return float(flux_value)
+    return float(flux_value), prev_spectrum
+
+def split_bands(signal, sample_rate):
+    # FFT-based band split
+    spectrum = np.fft.rfft(signal * np.hanning(len(signal)))
+    freqs = np.fft.rfftfreq(len(signal), 1/sample_rate)
+    # Narrow low band for kick: 40-120 Hz
+    # Narrow mid band for snare: 800-2000 Hz
+    bands = [(40, 120), (800, 2200), (10000, sample_rate//2)] # Lows, Mids, Highs
+    band_signals = []
+    for low, high in bands:
+        mask = (freqs >= low) & (freqs < high)
+        band_spectrum = np.zeros_like(spectrum)
+        band_spectrum[mask] = spectrum[mask]
+        band_signal = np.fft.irfft(band_spectrum, n=len(signal))
+        band_signals.append(band_signal)
+    return band_signals
 
 
 # ==============================
@@ -176,7 +199,7 @@ def compute_spectral_flux(signal):
 
 def readAudioFrames(in_data, frame_count, time_info, status):
     global smoothed_flux, selected_channel, num_channels, stop_flag
-    global flux_min, flux_max
+    global prev_spectrum_bands, peak_bands
 
     if stop_flag:
         return (in_data, pyaudio.paComplete)
@@ -184,42 +207,58 @@ def readAudioFrames(in_data, frame_count, time_info, status):
     # Convert bytes → float32
     signal = np.frombuffer(in_data, dtype=np.float32)
 
-    # Handle multi-channel
+    # Sum to mono if multi-channel
     if num_channels and num_channels > 1:
         try:
-            signal = signal.reshape(-1, num_channels)[:, selected_channel]
+            signal = signal.reshape(-1, num_channels)
+            signal = np.mean(signal, axis=1)
         except:
             signal = signal[::num_channels]
 
-    # Compute flux
-    flux_raw = compute_spectral_flux(signal)
+    # Split into 3 bands
+    band_signals = split_bands(signal, audioInputSampleRate)
 
-    # Smooth it
-    if smoothed_flux is None:
-        smoothed_flux = flux_raw
-    else:
-        smoothed_flux = (1 - FLUX_SMOOTH) * smoothed_flux + FLUX_SMOOTH * flux_raw
+    # Transient gate: output a fixed value for a short duration when a transient is detected
+    TRANSIENT_HOLD_FRAMES = 6  # Number of callback frames to hold the output (e.g., ~70ms at 512/44.1kHz)
+    TRANSIENT_OUTPUT_VALUE = 500
+    if not hasattr(readAudioFrames, 'transient_counters'):
+        readAudioFrames.transient_counters = [0, 0, 0]
+    flux_ints = []
+    for i, band_signal in enumerate(band_signals):
+        flux_raw, prev_spectrum_bands[i] = compute_spectral_flux(band_signal, prev_spectrum_bands[i])
+        # Threshold for low/mid bands to suppress noise
+        if i == 0 and flux_raw < LOW_BAND_THRESHOLD:
+            flux_raw = 0.0
+        if i == 1 and flux_raw < MID_BAND_THRESHOLD:
+            flux_raw = 0.0
+        # New normalization: rolling peak hold (decaying max)
+        if flux_raw > peak_bands[i]:
+            peak_bands[i] = flux_raw
+        else:
+            peak_bands[i] *= PEAK_DECAY_BANDS[i]
+        # Normalize to 0-1000, preserve transients
+        norm = flux_raw / (peak_bands[i] + 1e-8)
+        norm = np.clip(norm, 0.0, 1.0)
+        flux_int = int(norm * 1000)
+        # Transient detection and hold logic
+        if flux_int >= TRANSIENT_THRESHOLDS[i]:
+            readAudioFrames.transient_counters[i] = TRANSIENT_HOLD_FRAMES
+        elif readAudioFrames.transient_counters[i] > 0:
+            readAudioFrames.transient_counters[i] -= 1
+        if readAudioFrames.transient_counters[i] > 0:
+            flux_ints.append(TRANSIENT_OUTPUT_VALUE)
+        else:
+            flux_ints.append(0)
 
-    # ==============================
-    # DYNAMIC NORMALIZATION: 0..1000
-    # ==============================
-    if smoothed_flux > 1e-6:
-        flux_min = min(flux_min, smoothed_flux)
-        flux_max = max(flux_max, smoothed_flux)
+    print(f"Low:{flux_ints[0]} Mid:{flux_ints[1]} High:{flux_ints[2]}", flush=True)
 
-    if flux_max > flux_min:
-        norm = (smoothed_flux - flux_min) / (flux_max - flux_min)
-    else:
-        norm = 0.0
-
-    norm = np.clip(norm, 0.0, 1.0)
-    flux_int = int(norm * 1000)
-
-    print(f"{flux_int}", flush=True)
-
-    # Send OSC
-    osc_local.send_message(OSC_ADDR, flux_int)
-    osc_bcast.send_message(OSC_ADDR, flux_int)
+    # Send OSC for each band
+    osc_local.send_message(OSC_ADDR_LOW, flux_ints[0])
+    osc_local.send_message(OSC_ADDR_MID, flux_ints[1])
+    osc_local.send_message(OSC_ADDR_HIGH, flux_ints[2])
+    osc_bcast.send_message(OSC_ADDR_LOW, flux_ints[0])
+    osc_bcast.send_message(OSC_ADDR_MID, flux_ints[1])
+    osc_bcast.send_message(OSC_ADDR_HIGH, flux_ints[2])
 
     return (in_data, pyaudio.paContinue)
 
